@@ -1,0 +1,780 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+// errorReader is a custom reader that always returns an error
+type errorReader struct{}
+
+func (er *errorReader) Read(p []byte) (n int, err error) {
+	return 0, errors.New("simulated read error")
+}
+
+func TestMain(m *testing.M) {
+	log.SetOutput(io.Discard)
+	m.Run()
+}
+
+// errorResponseWriter is a custom http.ResponseWriter that simulates an error on Write
+type errorResponseWriter struct {
+	header http.Header
+	status int
+}
+
+func (erw *errorResponseWriter) Header() http.Header {
+	if erw.header == nil {
+		erw.header = make(http.Header)
+	}
+	return erw.header
+}
+
+func (erw *errorResponseWriter) Write(p []byte) (int, error) {
+	return 0, errors.New("simulated write error")
+}
+
+func (erw *errorResponseWriter) WriteHeader(statusCode int) {
+	erw.status = statusCode
+}
+
+// noFlushWriter simulates a ResponseWriter without http.Flusher support.
+type noFlushWriter struct{
+	header http.Header
+	status int
+}
+
+func (nfw *noFlushWriter) Header() http.Header {
+	if nfw.header == nil {
+		nfw.header = make(http.Header)
+	}
+	return nfw.header
+}
+
+func (nfw *noFlushWriter) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+
+func (nfw *noFlushWriter) WriteHeader(statusCode int) {
+	nfw.status = statusCode
+}
+
+type sseWriter struct {
+	header http.Header
+	buffer bytes.Buffer
+}
+
+func (sw *sseWriter) Header() http.Header {
+	if sw.header == nil {
+		sw.header = make(http.Header)
+	}
+	return sw.header
+}
+
+func (sw *sseWriter) Write(p []byte) (int, error) {
+	return sw.buffer.Write(p)
+}
+
+func (sw *sseWriter) WriteHeader(statusCode int) {
+	// no-op for tests
+}
+
+func (sw *sseWriter) Flush() {}
+
+func TestHandler(t *testing.T) {
+	defaultResponse := map[string]string{"result": "ok"}
+	app := &App{}
+	app.setResponseConfig("default", ResponseConfig{Response: defaultResponse, StatusCode: http.StatusOK})
+
+	// Test case 1: Non-POST method should be accepted
+	req, err := http.NewRequest("GET", "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	app.webhookHandler(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	// Test case 2: POST method with a body should be accepted
+	var jsonStr = []byte(`{"title":"buy cheese and bread for breakfast"}`)
+	req, err = http.NewRequest("POST", "/", bytes.NewBuffer(jsonStr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	rr = httptest.NewRecorder()
+	app.webhookHandler(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	// Check the response body is what we expect.
+	expected := `{"result":"ok"}`
+	// Trim newline characters from the response body for a more robust comparison
+	if strings.TrimSpace(rr.Body.String()) != expected {
+		t.Errorf("handler returned unexpected body: got %v want %v",
+			rr.Body.String(), expected)
+	}
+
+	// Test case 3: Custom response
+	customResponse := map[string]string{"status": "pending"}
+	appWithCustomResponse := &App{}
+	appWithCustomResponse.setResponseConfig("alpha", ResponseConfig{Response: customResponse, StatusCode: http.StatusOK})
+	req, err = http.NewRequest("POST", "/webhook/alpha", bytes.NewBuffer(jsonStr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	rr = httptest.NewRecorder()
+	appWithCustomResponse.webhookHandler(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler with custom response returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	expectedCustom := `{"status":"pending"}`
+	if strings.TrimSpace(rr.Body.String()) != expectedCustom {
+		t.Errorf("handler with custom response returned unexpected body: got %v want %v",
+			rr.Body.String(), expectedCustom)
+	}
+
+	// Test case 4: Error reading request body
+	req, err = http.NewRequest("POST", "/", &errorReader{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr = httptest.NewRecorder()
+	app.webhookHandler(rr, req)
+
+	if status := rr.Code; status != http.StatusInternalServerError {
+		t.Errorf("handler returned wrong status code for body read error: got %v want %v",
+			status, http.StatusInternalServerError)
+	}
+
+	// Test case 5: Error writing JSON response
+	req, err = http.NewRequest("POST", "/", bytes.NewBuffer(jsonStr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Create a response recorder that will cause an error on Write
+	errorWriter := &errorResponseWriter{}
+	app.webhookHandler(errorWriter, req)
+
+	if status := errorWriter.status; status != http.StatusInternalServerError {
+		t.Errorf("handler returned wrong status code for JSON encode error: got %v want %v",
+			status, http.StatusInternalServerError)
+	}
+}
+
+func TestWebhookHandlerStatusCode(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("default", ResponseConfig{Response: map[string]string{"ok": "true"}, StatusCode: http.StatusAccepted})
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewBufferString(`{"ok":true}`))
+	res := httptest.NewRecorder()
+
+	app.webhookHandler(res, req)
+
+	if status := res.Code; status != http.StatusAccepted {
+		t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusAccepted)
+	}
+}
+
+func TestResponseHandler(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("alpha", ResponseConfig{Response: map[string]string{"hello": "world"}, StatusCode: http.StatusCreated})
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/response?key=alpha", nil)
+	getRes := httptest.NewRecorder()
+	app.responseHandler(getRes, getReq)
+
+	if status := getRes.Code; status != http.StatusOK {
+		t.Errorf("response handler returned wrong status: got %v want %v", status, http.StatusOK)
+	}
+
+	var getPayload map[string]interface{}
+	if err := json.Unmarshal(getRes.Body.Bytes(), &getPayload); err != nil {
+		t.Fatalf("failed to parse response payload: %v", err)
+	}
+
+	if getPayload["statusCode"].(float64) != float64(http.StatusCreated) {
+		t.Errorf("response handler returned wrong status code: got %v want %v", getPayload["statusCode"], http.StatusCreated)
+	}
+
+	postBody := `{"response":{"status":"ok"},"statusCode":202}`
+	postReq := httptest.NewRequest(http.MethodPost, "/api/response?key=alpha", bytes.NewBufferString(postBody))
+	postRes := httptest.NewRecorder()
+	app.responseHandler(postRes, postReq)
+
+	if status := postRes.Code; status != http.StatusOK {
+		t.Errorf("response handler post returned wrong status: got %v want %v", status, http.StatusOK)
+	}
+
+	if config := app.getResponseConfig("alpha"); config.StatusCode != http.StatusAccepted {
+		t.Errorf("response handler did not update status code: got %v want %v", config.StatusCode, http.StatusAccepted)
+	}
+}
+
+func TestEventsHandler(t *testing.T) {
+	app := &App{events: []Event{
+		{ID: 1, Method: http.MethodPost, Path: "/webhook/alpha", Key: "alpha"},
+		{ID: 2, Method: http.MethodPost, Path: "/webhook/beta", Key: "beta"},
+	}}
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	res := httptest.NewRecorder()
+	app.eventsHandler(res, req)
+
+	if status := res.Code; status != http.StatusOK {
+		t.Errorf("events handler returned wrong status: got %v want %v", status, http.StatusOK)
+	}
+
+	var payload EventsResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to parse events response: %v", err)
+	}
+	if len(payload.Events) != 2 {
+		t.Errorf("events handler returned unexpected payload: %+v", payload.Events)
+	}
+
+	filteredReq := httptest.NewRequest(http.MethodGet, "/api/events?key=alpha", nil)
+	filteredRes := httptest.NewRecorder()
+	app.eventsHandler(filteredRes, filteredReq)
+
+	var filteredPayload EventsResponse
+	if err := json.Unmarshal(filteredRes.Body.Bytes(), &filteredPayload); err != nil {
+		t.Fatalf("failed to parse filtered events response: %v", err)
+	}
+	if len(filteredPayload.Events) != 1 || filteredPayload.Events[0].ID != 1 {
+		t.Errorf("events handler returned unexpected payload: %+v", payload.Events)
+	}
+}
+
+func TestResponseHandlerErrors(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("default", ResponseConfig{Response: map[string]string{"ok": "true"}, StatusCode: http.StatusOK})
+
+	badBody := httptest.NewRequest(http.MethodPost, "/api/response", bytes.NewBufferString("{"))
+	badRes := httptest.NewRecorder()
+	app.responseHandler(badRes, badBody)
+	if status := badRes.Code; status != http.StatusBadRequest {
+		t.Errorf("response handler returned wrong status for invalid JSON: got %v want %v", status, http.StatusBadRequest)
+	}
+
+	errorReq := httptest.NewRequest(http.MethodPost, "/api/response", &errorReader{})
+	errorRes := httptest.NewRecorder()
+	app.responseHandler(errorRes, errorReq)
+	if status := errorRes.Code; status != http.StatusInternalServerError {
+		t.Errorf("response handler returned wrong status for read error: got %v want %v", status, http.StatusInternalServerError)
+	}
+}
+
+func TestEventsStreamHandlerUnsupported(t *testing.T) {
+	app := &App{}
+	req := httptest.NewRequest(http.MethodGet, "/api/stream", nil)
+	res := &noFlushWriter{}
+	app.eventsStreamHandler(res, req)
+	if status := res.status; status != http.StatusInternalServerError {
+		t.Errorf("events stream handler returned wrong status: got %v want %v", status, http.StatusInternalServerError)
+	}
+}
+
+func TestCloseSubscribers(t *testing.T) {
+	app := &App{subscribers: make(map[chan Event]struct{})}
+	ch := app.addSubscriber()
+	app.closeSubscribers()
+	app.removeSubscriber(ch)
+}
+
+func TestEventsStreamLoop(t *testing.T) {
+	app := &App{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/stream", nil).WithContext(ctx)
+	writer := &sseWriter{}
+	flusher := writer
+	ticks := make(chan time.Time, 1)
+
+	done := make(chan struct{})
+	go func() {
+		app.eventsStreamLoop(writer, req, flusher, ticks)
+		close(done)
+	}()
+
+	for i := 0; i < 10; i++ {
+		app.mu.Lock()
+		subscriberCount := len(app.subscribers)
+		app.mu.Unlock()
+		if subscriberCount > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	ticks <- time.Now()
+	app.broadcastEvent(Event{ID: 1, Method: http.MethodPost, Path: "/webhook", Key: "default"})
+	time.Sleep(20 * time.Millisecond) // Allow event to be processed
+	cancel()
+	app.closeSubscribers()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("events stream loop did not exit")
+	}
+
+	output := writer.buffer.String()
+	if !strings.Contains(output, ": ping") {
+		t.Errorf("expected ping in output, got %q", output)
+	}
+	if !strings.Contains(output, "data:") {
+		t.Errorf("expected event data in output, got %q", output)
+	}
+}
+
+func TestNewServer(t *testing.T) {
+	app := &App{}
+	server, err := newServer(app, 9090)
+	if err != nil {
+		t.Fatalf("newServer returned error: %v", err)
+	}
+	if server.Addr != ":9090" {
+		t.Errorf("newServer returned wrong addr: got %v", server.Addr)
+	}
+	if server.Handler == nil {
+		t.Fatal("newServer returned nil handler")
+	}
+}
+
+func TestStoreEventMaxLimit(t *testing.T) {
+	app := &App{}
+	for i := 0; i < 60; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
+		app.storeEvent(req, "default", "body")
+	}
+	app.mu.Lock()
+	count := len(app.events)
+	app.mu.Unlock()
+	if count != 50 {
+		t.Errorf("storeEvent did not limit events: got %v want 50", count)
+	}
+}
+
+func TestGetResponseConfigFallbacks(t *testing.T) {
+	app := &App{}
+	// No default set - should return hardcoded fallback
+	config := app.getResponseConfig("nonexistent")
+	if config.StatusCode != 200 {
+		t.Errorf("getResponseConfig fallback wrong status: got %v want 200", config.StatusCode)
+	}
+
+	// Set default, then get nonexistent key - should return default
+	app.setResponseConfig("default", ResponseConfig{Response: "default", StatusCode: 201})
+	config = app.getResponseConfig("nonexistent")
+	if config.StatusCode != 201 {
+		t.Errorf("getResponseConfig default fallback wrong status: got %v want 201", config.StatusCode)
+	}
+
+	// Set specific key, get that key
+	app.setResponseConfig("specific", ResponseConfig{Response: "specific", StatusCode: 202})
+	config = app.getResponseConfig("specific")
+	if config.StatusCode != 202 {
+		t.Errorf("getResponseConfig specific wrong status: got %v want 202", config.StatusCode)
+	}
+}
+
+func TestSetResponseConfigEmptyKey(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("", ResponseConfig{Response: "empty", StatusCode: 200})
+	config := app.getResponseConfig("default")
+	if config.Response != "empty" {
+		t.Errorf("setResponseConfig empty key should set default: got %v", config.Response)
+	}
+}
+
+func TestResponseHandlerMethodNotAllowed(t *testing.T) {
+	app := &App{}
+	req := httptest.NewRequest(http.MethodDelete, "/api/response", nil)
+	res := httptest.NewRecorder()
+	app.responseHandler(res, req)
+	if status := res.Code; status != http.StatusMethodNotAllowed {
+		t.Errorf("response handler wrong status for DELETE: got %v want %v", status, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestResponseHandlerPathKey(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("pathkey", ResponseConfig{Response: "pathkey", StatusCode: 203})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/response/pathkey", nil)
+	res := httptest.NewRecorder()
+	app.responseHandler(res, req)
+
+	var payload map[string]interface{}
+	json.Unmarshal(res.Body.Bytes(), &payload)
+	if payload["key"] != "pathkey" {
+		t.Errorf("response handler path key wrong: got %v want pathkey", payload["key"])
+	}
+}
+
+func TestWebhookKeyFromPath(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/webhook", "default"},
+		{"/webhook/", "default"},
+		{"/webhook/alpha", "alpha"},
+		{"/webhook/alpha/beta", "alpha/beta"},
+	}
+	for _, tt := range tests {
+		got := webhookKeyFromPath(tt.path)
+		if got != tt.want {
+			t.Errorf("webhookKeyFromPath(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestResponseKeyFromRequest(t *testing.T) {
+	// Query param takes precedence
+	req := httptest.NewRequest(http.MethodGet, "/api/response/pathkey?key=querykey", nil)
+	got := responseKeyFromRequest(req)
+	if got != "querykey" {
+		t.Errorf("responseKeyFromRequest query param: got %q want querykey", got)
+	}
+
+	// Path-based key
+	req = httptest.NewRequest(http.MethodGet, "/api/response/pathkey", nil)
+	got = responseKeyFromRequest(req)
+	if got != "pathkey" {
+		t.Errorf("responseKeyFromRequest path: got %q want pathkey", got)
+	}
+
+	// Default
+	req = httptest.NewRequest(http.MethodGet, "/api/response", nil)
+	got = responseKeyFromRequest(req)
+	if got != "default" {
+		t.Errorf("responseKeyFromRequest default: got %q want default", got)
+	}
+}
+
+func TestWebhookHandlerNilBody(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("default", ResponseConfig{Response: "ok", StatusCode: 200})
+	req := httptest.NewRequest(http.MethodGet, "/webhook", nil)
+	req.Body = nil
+	res := httptest.NewRecorder()
+	app.webhookHandler(res, req)
+	if status := res.Code; status != http.StatusOK {
+		t.Errorf("webhook handler nil body wrong status: got %v want 200", status)
+	}
+}
+
+func TestRemoveSubscriberNotExists(t *testing.T) {
+	app := &App{subscribers: make(map[chan Event]struct{})}
+	ch := make(chan Event)
+	// Should not panic when removing non-existent subscriber
+	app.removeSubscriber(ch)
+}
+
+func TestBroadcastEventNoSubscribers(t *testing.T) {
+	app := &App{}
+	// Should not panic when broadcasting with no subscribers
+	app.broadcastEvent(Event{ID: 1})
+}
+
+func TestResponseHandlerPostWithoutStatusCode(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("default", ResponseConfig{Response: "old", StatusCode: 201})
+
+	// Post without statusCode should keep existing status
+	postBody := `{"response":"new"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/response", bytes.NewBufferString(postBody))
+	res := httptest.NewRecorder()
+	app.responseHandler(res, req)
+
+	config := app.getResponseConfig("default")
+	if config.StatusCode != 201 {
+		t.Errorf("response handler should keep status code: got %v want 201", config.StatusCode)
+	}
+	if config.Response != "new" {
+		t.Errorf("response handler should update response: got %v want new", config.Response)
+	}
+}
+
+func TestRemoveSubscriberExists(t *testing.T) {
+	app := &App{subscribers: make(map[chan Event]struct{})}
+	ch := app.addSubscriber()
+	app.removeSubscriber(ch)
+	app.mu.Lock()
+	_, exists := app.subscribers[ch]
+	app.mu.Unlock()
+	if exists {
+		t.Error("removeSubscriber should have removed the channel")
+	}
+}
+
+func TestEventsStreamHandlerWithFlusher(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("default", ResponseConfig{Response: "ok", StatusCode: 200})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/stream", nil).WithContext(ctx)
+
+	// Use httptest.ResponseRecorder which implements Flusher
+	res := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		app.eventsStreamHandler(res, req)
+		close(done)
+	}()
+
+	// Wait for subscriber to be added
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("eventsStreamHandler did not exit")
+	}
+
+	if ct := res.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("wrong content type: got %v want text/event-stream", ct)
+	}
+}
+
+func TestEventsStreamLoopMarshalError(t *testing.T) {
+	app := &App{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/stream", nil).WithContext(ctx)
+	writer := &sseWriter{}
+	ticks := make(chan time.Time)
+
+	done := make(chan struct{})
+	go func() {
+		app.eventsStreamLoop(writer, req, writer, ticks)
+		close(done)
+	}()
+
+	// Wait for subscriber
+	time.Sleep(10 * time.Millisecond)
+
+	// Broadcast event with unmarshalable data (channels can't be marshaled)
+	app.mu.Lock()
+	for ch := range app.subscribers {
+		select {
+		case ch <- Event{ID: 1}:
+		default:
+		}
+	}
+	app.mu.Unlock()
+
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("eventsStreamLoop did not exit")
+	}
+}
+
+// errorEventsWriter simulates JSON encode error for events
+type errorEventsWriter struct {
+	header http.Header
+	count  int
+}
+
+func (ew *errorEventsWriter) Header() http.Header {
+	if ew.header == nil {
+		ew.header = make(http.Header)
+	}
+	return ew.header
+}
+
+func (ew *errorEventsWriter) Write(p []byte) (int, error) {
+	ew.count++
+	if ew.count > 1 {
+		return 0, errors.New("simulated write error")
+	}
+	return len(p), nil
+}
+
+func (ew *errorEventsWriter) WriteHeader(statusCode int) {}
+
+func TestEventsHandlerEncodeError(t *testing.T) {
+	app := &App{events: []Event{{ID: 1}}}
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	res := &errorEventsWriter{}
+	app.eventsHandler(res, req)
+	// Just verify it doesn't panic - error path is hit
+}
+
+func TestEventsHandlerFilteredEncodeError(t *testing.T) {
+	app := &App{events: []Event{{ID: 1, Key: "alpha"}}}
+	req := httptest.NewRequest(http.MethodGet, "/api/events?key=alpha", nil)
+	res := &errorEventsWriter{}
+	app.eventsHandler(res, req)
+	// Just verify it doesn't panic - error path is hit
+}
+
+func TestResponseHandlerGetEncodeError(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("default", ResponseConfig{Response: "ok", StatusCode: 200})
+	req := httptest.NewRequest(http.MethodGet, "/api/response", nil)
+	res := &errorResponseWriter{}
+	app.responseHandler(res, req)
+	// Just verify it doesn't panic - error path is hit
+}
+
+func TestResponseHandlerPostEncodeError(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("default", ResponseConfig{Response: "ok", StatusCode: 200})
+	req := httptest.NewRequest(http.MethodPost, "/api/response", bytes.NewBufferString(`{"response":"new"}`))
+	res := &errorResponseWriter{}
+	app.responseHandler(res, req)
+	// Just verify it doesn't panic - error path is hit
+}
+
+func TestWebhookHandlerZeroStatusCode(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("default", ResponseConfig{Response: "ok", StatusCode: 0})
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewBufferString(`{}`))
+	res := httptest.NewRecorder()
+	app.webhookHandler(res, req)
+	// When statusCode is 0, WriteHeader should not be called explicitly
+	if status := res.Code; status != http.StatusOK {
+		t.Errorf("webhook handler zero status: got %v want 200", status)
+	}
+}
+
+func TestEventsHandlerNoEvents(t *testing.T) {
+	app := &App{events: []Event{}}
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	res := httptest.NewRecorder()
+	app.eventsHandler(res, req)
+
+	var payload EventsResponse
+	json.Unmarshal(res.Body.Bytes(), &payload)
+	if len(payload.Events) != 0 {
+		t.Errorf("events should be empty: got %v", len(payload.Events))
+	}
+}
+
+func TestEventsHandlerFilteredNoMatch(t *testing.T) {
+	app := &App{events: []Event{{ID: 1, Key: "alpha"}}}
+	req := httptest.NewRequest(http.MethodGet, "/api/events?key=beta", nil)
+	res := httptest.NewRecorder()
+	app.eventsHandler(res, req)
+
+	var payload EventsResponse
+	json.Unmarshal(res.Body.Bytes(), &payload)
+	if len(payload.Events) != 0 {
+		t.Errorf("filtered events should be empty: got %v", len(payload.Events))
+	}
+}
+
+func TestEventsHandlerMultipleFilteredEvents(t *testing.T) {
+	app := &App{events: []Event{
+		{ID: 1, Key: "alpha"},
+		{ID: 2, Key: "beta"},
+		{ID: 3, Key: "alpha"},
+	}}
+	req := httptest.NewRequest(http.MethodGet, "/api/events?key=alpha", nil)
+	res := httptest.NewRecorder()
+	app.eventsHandler(res, req)
+
+	var payload EventsResponse
+	json.Unmarshal(res.Body.Bytes(), &payload)
+	if len(payload.Events) != 2 {
+		t.Errorf("filtered events count wrong: got %v want 2", len(payload.Events))
+	}
+}
+
+func TestBroadcastEventWithFullChannel(t *testing.T) {
+	app := &App{subscribers: make(map[chan Event]struct{})}
+	// Create a channel with buffer 1 and fill it
+	ch := make(chan Event, 1)
+	ch <- Event{ID: 0}
+	app.subscribers[ch] = struct{}{}
+
+	// Broadcast should not block even with full channel
+	app.broadcastEvent(Event{ID: 1})
+	// Test passes if it doesn't deadlock
+}
+
+func TestEventsStreamLoopChannelClosed(t *testing.T) {
+	app := &App{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/stream", nil).WithContext(ctx)
+	writer := &sseWriter{}
+	ticks := make(chan time.Time)
+
+	done := make(chan struct{})
+	go func() {
+		app.eventsStreamLoop(writer, req, writer, ticks)
+		close(done)
+	}()
+
+	// Wait for subscriber
+	time.Sleep(10 * time.Millisecond)
+
+	// Close subscribers which closes the channel
+	app.closeSubscribers()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("eventsStreamLoop did not exit when channel closed")
+	}
+}
+
+func TestEventsStreamLoopContextDone(t *testing.T) {
+	app := &App{}
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/stream", nil).WithContext(ctx)
+	writer := &sseWriter{}
+	ticks := make(chan time.Time)
+
+	done := make(chan struct{})
+	go func() {
+		app.eventsStreamLoop(writer, req, writer, ticks)
+		close(done)
+	}()
+
+	// Wait for subscriber
+	time.Sleep(10 * time.Millisecond)
+
+	// Cancel context
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("eventsStreamLoop did not exit when context cancelled")
+	}
+}

@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Webhook Monitor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              ink: "#0c0d12",
+              mist: "#eceff6",
+              flare: "#ff7a59",
+              lagoon: "#3ed8a6",
+              night: "#121826",
+            },
+            fontFamily: {
+              display: ["Playfair Display", "serif"],
+              body: ["IBM Plex Sans", "sans-serif"],
+            },
+          },
+        },
+      };
+    </script>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css"
+    />
+    <style>
+      pre code,
+      pre code span {
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
+    </style>
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=Playfair+Display:wght@500;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="min-h-screen bg-gradient-to-br from-ink via-night to-ink text-mist font-body">
+    <div id="root"></div>
+
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
+
+    <script type="text/babel">
+      const { useEffect, useMemo, useRef, useState } = React;
+
+      const formatTime = (value) =>
+        new Date(value).toLocaleTimeString(undefined, {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        });
+
+      const formatBody = (value) => {
+        if (!value) return "<empty body>";
+        try {
+          const parsed = JSON.parse(value);
+          return JSON.stringify(parsed, null, 2);
+        } catch (error) {
+          return value;
+        }
+      };
+
+      const methodColors = {
+        GET: "border-lagoon/40 bg-lagoon/10 text-lagoon",
+        POST: "border-flare/40 bg-flare/10 text-flare",
+        PUT: "border-amber-400/40 bg-amber-400/10 text-amber-400",
+        PATCH: "border-violet-400/40 bg-violet-400/10 text-violet-400",
+        DELETE: "border-red-400/40 bg-red-400/10 text-red-400",
+        HEAD: "border-cyan-400/40 bg-cyan-400/10 text-cyan-400",
+        OPTIONS: "border-pink-400/40 bg-pink-400/10 text-pink-400",
+      };
+
+      const getMethodColor = (method) =>
+        methodColors[method] || "border-mist/40 bg-mist/10 text-mist";
+
+      function App() {
+        const [events, setEvents] = useState([]);
+        const [status, setStatus] = useState("Waiting for traffic...");
+        const [responseBody, setResponseBody] = useState(
+          '{\n  "result": "ok"\n}'
+        );
+        const [webhookKey, setWebhookKey] = useState("default");
+        const [keyInput, setKeyInput] = useState("default");
+        const [knownKeys, setKnownKeys] = useState(["default"]);
+        const [saveState, setSaveState] = useState("");
+        const [statusCode, setStatusCode] = useState(200);
+        const editorRef = useRef(null);
+        const editorScrollRef = useRef(null);
+        const statusOptions = [
+          { code: 200, label: "200 OK" },
+          { code: 201, label: "201 Created" },
+          { code: 202, label: "202 Accepted" },
+          { code: 204, label: "204 No Content" },
+          { code: 301, label: "301 Moved Permanently" },
+          { code: 302, label: "302 Found" },
+          { code: 304, label: "304 Not Modified" },
+          { code: 400, label: "400 Bad Request" },
+          { code: 401, label: "401 Unauthorized" },
+          { code: 403, label: "403 Forbidden" },
+          { code: 404, label: "404 Not Found" },
+          { code: 409, label: "409 Conflict" },
+          { code: 422, label: "422 Unprocessable Entity" },
+          { code: 429, label: "429 Too Many Requests" },
+          { code: 500, label: "500 Internal Server Error" },
+          { code: 502, label: "502 Bad Gateway" },
+          { code: 503, label: "503 Service Unavailable" },
+        ];
+
+        const formattedEvents = useMemo(
+          () => events.filter((event) => (webhookKey ? event.key === webhookKey : true)),
+          [events, webhookKey]
+        );
+
+        useEffect(() => {
+          const keys = new Set(knownKeys);
+          events.forEach((event) => keys.add(event.key));
+          if (keys.size !== knownKeys.length) {
+            setKnownKeys([...keys]);
+          }
+        }, [events]);
+
+        useEffect(() => {
+          const loadInitial = async () => {
+            try {
+              const [eventsRes, responseRes] = await Promise.all([
+                fetch(`/api/events?key=${encodeURIComponent(webhookKey)}`),
+                fetch(`/api/response?key=${encodeURIComponent(webhookKey)}`),
+              ]);
+              const eventsData = await eventsRes.json();
+              const responseData = await responseRes.json();
+              setEvents(eventsData.events || []);
+              setResponseBody(JSON.stringify(responseData.response, null, 2));
+              if (typeof responseData.statusCode === "number") {
+                setStatusCode(responseData.statusCode);
+              }
+              setSaveState("");
+              setStatus("Live");
+            } catch (error) {
+              setStatus("Disconnected");
+            }
+          };
+
+          loadInitial();
+
+          const stream = new EventSource("/api/stream");
+          stream.onmessage = (message) => {
+            const event = JSON.parse(message.data);
+            setEvents((prev) => [event, ...prev].slice(0, 50));
+            setStatus("Live");
+          };
+          stream.onerror = () => {
+            setStatus("Disconnected");
+          };
+          return () => stream.close();
+        }, [webhookKey]);
+
+        useEffect(() => {
+          if (window.Prism) {
+            window.Prism.highlightAll();
+          }
+        }, [formattedEvents]);
+
+        useEffect(() => {
+          if (!window.Prism || !editorRef.current) {
+            return;
+          }
+          const highlighted = window.Prism.highlight(
+            responseBody,
+            window.Prism.languages.json,
+            "json"
+          );
+          editorRef.current.innerHTML = highlighted + "\n";
+        }, [responseBody]);
+
+        const handleSave = async (event) => {
+          event.preventDefault();
+          setSaveState("");
+          try {
+            JSON.parse(responseBody);
+          } catch (err) {
+            setSaveState("Invalid JSON");
+            return;
+          }
+
+          try {
+            const res = await fetch(
+              `/api/response?key=${encodeURIComponent(webhookKey)}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  response: JSON.parse(responseBody),
+                  statusCode: Number(statusCode),
+                }),
+              }
+            );
+            if (!res.ok) {
+              throw new Error("Failed to save");
+            }
+            setSaveState("Saved");
+          } catch (err) {
+            setSaveState("Save failed");
+          }
+        };
+
+        return (
+          <main className="px-6 py-10 md:px-14">
+            <header className="mb-10 flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="uppercase tracking-[0.3em] text-sm text-lagoon">
+                  Webhook Monitor
+                </p>
+                <h1 className="font-display text-4xl md:text-5xl text-mist">
+                  Observe every incoming call in real time
+                </h1>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/5 px-6 py-4 backdrop-blur">
+                <p className="text-sm text-mist/70">Status</p>
+                <p className="text-2xl font-semibold text-flare">{status}</p>
+                <p className="text-sm text-mist/60">
+                  {events.length} event{events.length === 1 ? "" : "s"}
+                </p>
+              </div>
+            </header>
+
+            <section className="flex flex-col gap-6 md:flex-row">
+              <div className="rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl shadow-black/30 md:w-[70%] min-w-0">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                  <h2 className="font-display text-2xl text-mist">Recent calls</h2>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-mist/70">
+                    <span>Webhook key</span>
+                    {knownKeys.length > 1 && (
+                      <select
+                        value={webhookKey}
+                        onChange={(event) => setWebhookKey(event.target.value)}
+                        className="rounded-full border border-white/10 bg-black/60 px-3 py-1 text-xs text-mist/90 outline-none focus:ring-2 focus:ring-flare"
+                      >
+                        {knownKeys.map((key) => (
+                          <option key={key} value={key}>
+                            {key}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    <input
+                      value={keyInput}
+                      onChange={(event) => setKeyInput(event.target.value)}
+                      className="w-28 rounded-full border border-white/10 bg-black/60 px-3 py-1 text-xs text-mist/90 outline-none focus:ring-2 focus:ring-flare"
+                      placeholder="new key"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newKey = keyInput.trim() || "default";
+                        setWebhookKey(newKey);
+                        if (!knownKeys.includes(newKey)) {
+                          setKnownKeys([...knownKeys, newKey]);
+                        }
+                        setKeyInput("");
+                      }}
+                      className="rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs text-mist"
+                    >
+                      Add
+                    </button>
+                    <span className="rounded-full bg-white/10 px-3 py-1 text-xs text-mist/70">
+                      Active: {webhookKey}
+                    </span>
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  {formattedEvents.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-white/20 p-6 text-mist/70">
+                      Send a request to <code className="text-flare">/webhook/{webhookKey}</code> to see it here.
+                    </div>
+                  ) : (
+                    formattedEvents.map((event) => (
+                      <article
+                        key={event.id}
+                        className="rounded-2xl border border-white/10 bg-ink/60 p-4"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-[0.25em] text-mist/60">
+                              <span className={`rounded-full border px-2 py-0.5 text-[0.65rem] font-semibold ${getMethodColor(event.method)}`}>
+                                {event.method}
+                              </span>
+                              <span>{event.path}</span>
+                            </p>
+                            <p className="text-lg font-semibold text-mist">
+                              {formatTime(event.timestamp)}
+                            </p>
+                          </div>
+                          <span className="rounded-full bg-lagoon/20 px-3 py-1 text-xs text-lagoon">
+                            #{event.id}
+                          </span>
+                        </div>
+                        <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-black/60 p-3 text-xs">
+                          <code className="language-json text-mist/90">
+                            {formatBody(event.body)}
+                          </code>
+                        </pre>
+                        <div className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3">
+                          <p className="text-xs uppercase tracking-[0.25em] text-mist/60">
+                            Headers
+                          </p>
+                          <ul className="mt-2 space-y-1 text-xs text-mist/70 break-words">
+                            {event.headers && Object.keys(event.headers).length > 0 ? (
+                              Object.entries(event.headers).map(([key, values]) => (
+                                <li key={key} className="flex flex-wrap gap-2 break-all">
+                                  <span className="font-semibold text-mist/80">
+                                    {key}:
+                                  </span>
+                                  <span>{values.join(", ")}</span>
+                                </li>
+                              ))
+                            ) : (
+                              <li className="text-mist/50">No headers captured</li>
+                            )}
+                          </ul>
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <aside className="space-y-6 md:w-[30%] md:flex-shrink-0">
+                <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
+                  <h2 className="font-display text-2xl text-mist mb-2">Configure response</h2>
+                  <p className="text-xs text-mist/50 mb-4">for <code className="text-flare">/webhook/{webhookKey}</code></p>
+                  <form className="space-y-4" onSubmit={handleSave}>
+                    <label className="text-sm text-mist/70">JSON response body</label>
+                    <div className="flex flex-wrap items-center gap-3 text-sm text-mist/70">
+                      <span>Status code</span>
+                      <select
+                        value={statusCode}
+                        onChange={(event) => setStatusCode(Number(event.target.value))}
+                        className="rounded-full border border-white/10 bg-black/60 px-3 py-1 text-sm text-mist/90 outline-none focus:ring-2 focus:ring-flare"
+                      >
+                        {statusOptions.map((option) => (
+                          <option key={option.code} value={option.code}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="relative text-xs">
+                      <pre
+                        ref={editorScrollRef}
+                        className="max-h-56 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-mist/90"
+                      >
+                        <code ref={editorRef} className="language-json"></code>
+                      </pre>
+                      <textarea
+                        className="absolute inset-0 h-full w-full resize-none bg-transparent p-4 font-mono text-transparent caret-mist/80 outline-none"
+                        value={responseBody}
+                        spellCheck="false"
+                        onChange={(event) => setResponseBody(event.target.value)}
+                        onScroll={(event) => {
+                          if (!editorScrollRef.current) return;
+                          editorScrollRef.current.scrollTop = event.target.scrollTop;
+                          editorScrollRef.current.scrollLeft = event.target.scrollLeft;
+                        }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <button
+                        type="submit"
+                        className="rounded-full bg-flare px-5 py-2 text-sm font-semibold text-ink"
+                      >
+                        Save response
+                      </button>
+                      <span className="text-xs text-mist/70">{saveState}</span>
+                    </div>
+                  </form>
+                </div>
+
+                <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
+                  <h2 className="font-display text-2xl text-mist mb-4">How to send</h2>
+                  <div className="space-y-4 text-sm text-mist/70">
+                    <p className="flex flex-wrap items-center gap-2">
+                      <span>Target endpoint:</span>
+                      <code className="text-flare break-all">http://localhost:8080/webhook/{webhookKey}</code>
+                    </p>
+                    <pre className="rounded-xl bg-black/40 p-4 text-xs text-mist/80 whitespace-pre-wrap break-all">
+                      <code className="language-bash">{`curl -X POST -H "Content-Type: application/json" -d '{"message":"hello"}' http://localhost:8080/webhook/${webhookKey}`}</code>
+                    </pre>
+                    <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                      <p className="font-semibold text-mist">What you see</p>
+                      <ul className="mt-2 list-disc pl-5 space-y-1">
+                        <li>Method, path, timestamp</li>
+                        <li>Raw body captured</li>
+                        <li>Realtime SSE stream</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+            </section>
+          </main>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    </script>
+  </body>
+</html>
