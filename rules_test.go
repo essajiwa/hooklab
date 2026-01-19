@@ -828,3 +828,114 @@ func TestWebhookHandlerWithDisabledRule(t *testing.T) {
 		t.Errorf("expected status 200, got %d", w.Code)
 	}
 }
+
+// ==================== getKeys Tests ====================
+
+func TestGetKeysEmpty(t *testing.T) {
+	app := &App{}
+	keys := app.getKeys()
+
+	if len(keys) != 1 {
+		t.Errorf("expected 1 key (default), got %d", len(keys))
+	}
+	if keys[0] != "default" {
+		t.Errorf("expected 'default' key, got '%s'", keys[0])
+	}
+}
+
+func TestGetKeysFromResponses(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("response-key", ResponseConfig{Response: "test", StatusCode: 200})
+
+	keys := app.getKeys()
+
+	found := false
+	for _, k := range keys {
+		if k == "response-key" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'response-key' in keys, got %v", keys)
+	}
+}
+
+func TestGetKeysFromEvents(t *testing.T) {
+	app := &App{}
+	app.storeEvent(httptest.NewRequest(http.MethodPost, "/webhook/event-key", nil), "event-key", "test")
+
+	keys := app.getKeys()
+
+	found := false
+	for _, k := range keys {
+		if k == "event-key" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'event-key' in keys, got %v", keys)
+	}
+}
+
+func TestGetKeysFromRules(t *testing.T) {
+	app := &App{}
+	app.addRule("rule-key", Rule{Name: "test", Condition: "true", Enabled: true})
+
+	keys := app.getKeys()
+
+	found := false
+	for _, k := range keys {
+		if k == "rule-key" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'rule-key' in keys, got %v", keys)
+	}
+}
+
+func TestGetKeysCombined(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("resp-key", ResponseConfig{Response: "test", StatusCode: 200})
+	app.storeEvent(httptest.NewRequest(http.MethodPost, "/webhook/event-key", nil), "event-key", "test")
+	app.addRule("rule-key", Rule{Name: "test", Condition: "true", Enabled: true})
+
+	keys := app.getKeys()
+
+	expectedKeys := []string{"default", "resp-key", "event-key", "rule-key"}
+	if len(keys) != len(expectedKeys) {
+		t.Errorf("expected %d keys, got %d: %v", len(expectedKeys), len(keys), keys)
+	}
+
+	for _, expected := range expectedKeys {
+		found := false
+		for _, k := range keys {
+			if k == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected key '%s' not found in %v", expected, keys)
+		}
+	}
+}
+
+func TestGetKeysSorted(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("zebra", ResponseConfig{Response: "test", StatusCode: 200})
+	app.setResponseConfig("alpha", ResponseConfig{Response: "test", StatusCode: 200})
+	app.setResponseConfig("beta", ResponseConfig{Response: "test", StatusCode: 200})
+
+	keys := app.getKeys()
+
+	for i := 1; i < len(keys); i++ {
+		if keys[i-1] > keys[i] {
+			t.Errorf("keys not sorted: %v", keys)
+			break
+		}
+	}
+}

@@ -36,7 +36,7 @@
         color: #eceff6 !important;
         font-family: ui-monospace, monospace !important;
         font-size: 0.75rem !important;
-        height: 8rem !important;
+        height: 10rem !important;
       }
       .CodeMirror-gutters {
         background: transparent !important;
@@ -51,9 +51,56 @@
       .CodeMirror-selected {
         background: rgba(255,122,89,0.2) !important;
       }
+      .github-ribbon {
+        position: fixed;
+        top: 0;
+        right: 0;
+        z-index: 50;
+        width: 150px;
+        height: 150px;
+        overflow: hidden;
+        pointer-events: none;
+      }
+      .github-ribbon a {
+        pointer-events: auto;
+        position: absolute;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        width: 200px;
+        padding: 8px 0;
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        color: #eceff6;
+        font-size: 12px;
+        font-weight: 500;
+        text-decoration: none;
+        text-align: center;
+        transform: rotate(45deg);
+        top: 35px;
+        right: -50px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        border: 1px solid rgba(255,255,255,0.1);
+        transition: background 0.2s;
+      }
+      .github-ribbon a:hover {
+        background: linear-gradient(135deg, #2a2a4e 0%, #1e2a4e 100%);
+      }
+      .github-ribbon svg {
+        width: 16px;
+        height: 16px;
+      }
     </style>
   </head>
   <body class="min-h-screen bg-gradient-to-br from-ink via-night to-ink text-mist font-body">
+    <div class="github-ribbon">
+      <a href="https://github.com/essajiwa/hooklab" target="_blank" rel="noopener noreferrer">
+        <svg fill="currentColor" viewBox="0 0 24 24">
+          <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+        </svg>
+        GitHub
+      </a>
+    </div>
     <div id="root"></div>
 
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -67,7 +114,7 @@
     <script type="text/babel">
       const { useEffect, useRef, useState } = React;
 
-      function JsonEditor({ value, onChange, placeholder }) {
+      function JsonEditor({ value, onChangeRef, placeholder }) {
         const containerRef = useRef(null);
         const cmRef = useRef(null);
 
@@ -87,15 +134,11 @@
           });
           
           cmRef.current.on("change", (cm) => {
-            onChange(cm.getValue());
+            if (onChangeRef) {
+              onChangeRef.current = cm.getValue();
+            }
           });
         }, []);
-
-        useEffect(() => {
-          if (cmRef.current && cmRef.current.getValue() !== value) {
-            cmRef.current.setValue(value || '');
-          }
-        }, [value]);
 
         return <div ref={containerRef} className="rounded-lg border border-white/10 bg-black/40 overflow-hidden"></div>;
       }
@@ -122,13 +165,18 @@
 
       function RuleCard({ rule, onUpdate, onDelete, onToggle }) {
         const [isEditing, setIsEditing] = useState(false);
-        const [editData, setEditData] = useState(rule);
+        const [editData, setEditData] = useState(() => ({
+          ...rule,
+          response: typeof rule.response === 'string' ? rule.response : JSON.stringify(rule.response, null, 2)
+        }));
         const [error, setError] = useState('');
+        const responseRef = useRef(typeof rule.response === 'string' ? rule.response : JSON.stringify(rule.response, null, 2));
 
         const handleSave = async () => {
           setError('');
+          const responseValue = responseRef.current;
           try {
-            JSON.parse(editData.response || '{}');
+            JSON.parse(responseValue || '{}');
           } catch (e) {
             setError('Invalid JSON in response');
             return;
@@ -136,7 +184,7 @@
           
           const success = await onUpdate(rule.id, {
             ...editData,
-            response: JSON.parse(editData.response || '{}'),
+            response: JSON.parse(responseValue || '{}'),
           });
           if (success) {
             setIsEditing(false);
@@ -151,7 +199,7 @@
                 <input
                   type="text"
                   value={editData.name}
-                  onChange={(e) => setEditData({ ...editData, name: e.target.value })}
+                  onChange={(e) => setEditData(prev => ({ ...prev, name: e.target.value }))}
                   className="mt-1 w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-mist outline-none focus:border-flare"
                   placeholder="e.g., High Value Payment"
                 />
@@ -162,7 +210,7 @@
                 <input
                   type="text"
                   value={editData.condition}
-                  onChange={(e) => setEditData({ ...editData, condition: e.target.value })}
+                  onChange={(e) => setEditData(prev => ({ ...prev, condition: e.target.value }))}
                   className="mt-1 w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-mist font-mono outline-none focus:border-flare"
                   placeholder='e.g., body.amount > 100 && body.currency == "USD"'
                 />
@@ -176,7 +224,7 @@
                   <label className="text-xs text-mist/60 uppercase tracking-wider">Status Code</label>
                   <select
                     value={editData.statusCode}
-                    onChange={(e) => setEditData({ ...editData, statusCode: parseInt(e.target.value) })}
+                    onChange={(e) => setEditData(prev => ({ ...prev, statusCode: parseInt(e.target.value) }))}
                     className="mt-1 w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-mist outline-none focus:border-flare"
                   >
                     {statusOptions.map((opt) => (
@@ -189,7 +237,7 @@
                   <input
                     type="number"
                     value={editData.priority}
-                    onChange={(e) => setEditData({ ...editData, priority: parseInt(e.target.value) || 0 })}
+                    onChange={(e) => setEditData(prev => ({ ...prev, priority: parseInt(e.target.value) || 0 }))}
                     className="mt-1 w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-mist outline-none focus:border-flare"
                   />
                   <p className="mt-1 text-xs text-mist/40">Lower = higher priority</p>
@@ -199,8 +247,8 @@
               <div>
                 <label className="text-xs text-mist/60 uppercase tracking-wider">Response Body (JSON)</label>
                 <JsonEditor
-                  value={typeof editData.response === 'string' ? editData.response : JSON.stringify(editData.response, null, 2)}
-                  onChange={(val) => setEditData({ ...editData, response: val })}
+                  value={editData.response}
+                  onChangeRef={responseRef}
                 />
               </div>
 
@@ -214,7 +262,12 @@
                   Save
                 </button>
                 <button
-                  onClick={() => { setIsEditing(false); setEditData(rule); }}
+                  onClick={() => { 
+                    setIsEditing(false); 
+                    const resetResponse = typeof rule.response === 'string' ? rule.response : JSON.stringify(rule.response, null, 2);
+                    setEditData({ ...rule, response: resetResponse }); 
+                    responseRef.current = resetResponse;
+                  }}
                   className="rounded-full border border-white/10 px-4 py-2 text-sm text-mist hover:bg-white/10"
                 >
                   Cancel
@@ -251,7 +304,12 @@
                   {rule.enabled ? 'Disable' : 'Enable'}
                 </button>
                 <button
-                  onClick={() => setIsEditing(true)}
+                  onClick={() => {
+                    const currentResponse = typeof rule.response === 'string' ? rule.response : JSON.stringify(rule.response, null, 2);
+                    responseRef.current = currentResponse;
+                    setEditData({ ...rule, response: currentResponse });
+                    setIsEditing(true);
+                  }}
                   className="rounded-full bg-white/10 px-3 py-1 text-xs text-mist hover:bg-white/20"
                 >
                   Edit
@@ -273,7 +331,15 @@
           const params = new URLSearchParams(window.location.search);
           return params.get('key') || 'default';
         });
-        const [keyInput, setKeyInput] = useState(webhookKey);
+        const [keyInput, setKeyInput] = useState('');
+        const [knownKeys, setKnownKeys] = useState(() => {
+          try {
+            const stored = localStorage.getItem('hooklab_keys');
+            return stored ? JSON.parse(stored) : ['default'];
+          } catch (e) {
+            return ['default'];
+          }
+        });
         const [rules, setRules] = useState([]);
         const [loading, setLoading] = useState(true);
         const [showNewRule, setShowNewRule] = useState(false);
@@ -286,6 +352,7 @@
           enabled: true,
         });
         const [error, setError] = useState('');
+        const newRuleResponseRef = useRef('{\n  "status": "matched"\n}');
 
         const loadRules = async () => {
           setLoading(true);
@@ -305,16 +372,51 @@
           window.history.replaceState({}, '', newUrl);
         }, [webhookKey]);
 
-        const handleKeyChange = () => {
-          if (keyInput.trim()) {
-            setWebhookKey(keyInput.trim());
+        // Save knownKeys to localStorage whenever it changes
+        useEffect(() => {
+          localStorage.setItem('hooklab_keys', JSON.stringify(knownKeys));
+        }, [knownKeys]);
+
+        // Sync keys from backend on page load
+        useEffect(() => {
+          const syncKeys = async () => {
+            try {
+              const res = await fetch('/api/keys');
+              const data = await res.json();
+              const backendKeys = data.keys || ['default'];
+              setKnownKeys(backendKeys.sort());
+            } catch (e) {
+              // Keep localStorage keys on error
+            }
+          };
+          syncKeys();
+        }, []);
+
+        const handleKeyChange = async () => {
+          const newKey = keyInput.trim();
+          if (!newKey) return;
+          // Create response config on backend to register the key
+          try {
+            await fetch(`/api/response?key=${encodeURIComponent(newKey)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ response: { result: 'ok' }, statusCode: 200 }),
+            });
+          } catch (e) {
+            console.error('Failed to register key:', e);
           }
+          setWebhookKey(newKey);
+          if (!knownKeys.includes(newKey)) {
+            setKnownKeys(prev => [...prev, newKey].sort());
+          }
+          setKeyInput('');
         };
 
         const createRule = async () => {
           setError('');
+          const responseValue = newRuleResponseRef.current;
           try {
-            JSON.parse(newRule.response);
+            JSON.parse(responseValue);
           } catch (e) {
             setError('Invalid JSON in response');
             return;
@@ -325,7 +427,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               ...newRule,
-              response: JSON.parse(newRule.response),
+              response: JSON.parse(responseValue),
             }),
           });
 
@@ -339,6 +441,7 @@
               priority: 0,
               enabled: true,
             });
+            newRuleResponseRef.current = '{\n  "status": "matched"\n}';
             loadRules();
           } else {
             const data = await res.json();
@@ -380,7 +483,7 @@
           <main className="px-6 py-10 md:px-14 max-w-6xl mx-auto">
             <header className="mb-10">
               <div className="flex items-center gap-4 mb-6">
-                <a href="/" className="text-mist/60 hover:text-mist text-sm">← Back to Monitor</a>
+                <a href={`/?key=${encodeURIComponent(webhookKey)}`} className="text-mist/60 hover:text-mist text-sm">← Back to Monitor</a>
               </div>
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div>
@@ -390,19 +493,28 @@
                   </h1>
                 </div>
                 <div className="flex items-center gap-3">
+                  <select
+                    value={webhookKey}
+                    onChange={(e) => setWebhookKey(e.target.value)}
+                    className="rounded-full border border-white/10 bg-black/40 px-4 py-2 text-sm text-mist outline-none focus:border-flare"
+                  >
+                    {knownKeys.map((key) => (
+                      <option key={key} value={key}>{key}</option>
+                    ))}
+                  </select>
                   <input
                     type="text"
                     value={keyInput}
                     onChange={(e) => setKeyInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleKeyChange()}
                     className="rounded-full border border-white/10 bg-black/40 px-4 py-2 text-sm text-mist outline-none focus:border-flare"
-                    placeholder="Webhook key"
+                    placeholder="New key"
                   />
                   <button
                     onClick={handleKeyChange}
                     className="rounded-full bg-flare px-4 py-2 text-sm font-semibold text-ink"
                   >
-                    Load
+                    Add
                   </button>
                 </div>
               </div>
@@ -510,7 +622,7 @@
                   <label className="text-xs text-mist/60 uppercase tracking-wider">Response Body (JSON)</label>
                   <JsonEditor
                     value={newRule.response}
-                    onChange={(val) => setNewRule({ ...newRule, response: val })}
+                    onChangeRef={newRuleResponseRef}
                   />
                 </div>
 

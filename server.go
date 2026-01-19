@@ -19,6 +19,7 @@ func newServer(app *App, port int) (*http.Server, error) {
 	mux.HandleFunc("/api/response", app.responseHandler)
 	mux.HandleFunc("/api/response/", app.responseHandler)
 	mux.HandleFunc("/api/rules", app.rulesHandler)
+	mux.HandleFunc("/api/keys", app.keysHandler)
 
 	webDir, err := fs.Sub(webFS, "web")
 	if err != nil {

@@ -160,6 +160,40 @@ func (a *App) closeSubscribers() {
 	a.subscribers = make(map[chan Event]struct{})
 }
 
+// getKeys returns all known webhook keys from events, responses, and rules
+func (a *App) getKeys() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	keySet := make(map[string]struct{})
+	
+	// Add keys from events
+	for _, event := range a.events {
+		keySet[event.Key] = struct{}{}
+	}
+	
+	// Add keys from responses
+	for key := range a.responses {
+		keySet[key] = struct{}{}
+	}
+	
+	// Add keys from rules
+	for key := range a.rules {
+		keySet[key] = struct{}{}
+	}
+	
+	// Always include "default"
+	keySet["default"] = struct{}{}
+	
+	keys := make([]string, 0, len(keySet))
+	for key := range keySet {
+		keys = append(keys, key)
+	}
+	
+	sort.Strings(keys)
+	return keys
+}
+
 // Rule management methods
 
 func (a *App) getRules(key string) []Rule {

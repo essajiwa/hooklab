@@ -637,3 +637,186 @@ func TestEventsHandlerWithKeyWriteError(t *testing.T) {
 		t.Errorf("expected status 500 on write error, got %d", w.status)
 	}
 }
+
+func TestKeysHandler(t *testing.T) {
+	app := &App{}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
+	res := httptest.NewRecorder()
+	app.keysHandler(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", res.Code)
+	}
+
+	var payload map[string][]string
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	keys := payload["keys"]
+	if len(keys) != 1 || keys[0] != "default" {
+		t.Errorf("expected keys to contain only 'default', got %v", keys)
+	}
+}
+
+func TestKeysHandlerWithMultipleKeys(t *testing.T) {
+	app := &App{}
+
+	app.setResponseConfig("key1", ResponseConfig{Response: map[string]string{"test": "1"}, StatusCode: 200})
+	app.setResponseConfig("key2", ResponseConfig{Response: map[string]string{"test": "2"}, StatusCode: 200})
+	app.storeEvent(httptest.NewRequest(http.MethodPost, "/webhook/key3", nil), "key3", "test")
+	app.addRule("key4", Rule{Name: "test", Condition: "true", Enabled: true})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
+	res := httptest.NewRecorder()
+	app.keysHandler(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", res.Code)
+	}
+
+	var payload map[string][]string
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	keys := payload["keys"]
+	expectedKeys := []string{"default", "key1", "key2", "key3", "key4"}
+	if len(keys) != len(expectedKeys) {
+		t.Errorf("expected %d keys, got %d: %v", len(expectedKeys), len(keys), keys)
+	}
+
+	for _, expected := range expectedKeys {
+		found := false
+		for _, k := range keys {
+			if k == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected key '%s' not found in %v", expected, keys)
+		}
+	}
+}
+
+func TestKeysHandlerWriteError(t *testing.T) {
+	app := &App{}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
+	w := &errorResponseWriter{}
+
+	app.keysHandler(w, req)
+
+	if w.status != http.StatusInternalServerError {
+		t.Errorf("expected status 500 on write error, got %d", w.status)
+	}
+}
+
+// ==================== Body Size Limit Tests ====================
+
+func TestWebhookHandlerBodySizeLimit(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("default", ResponseConfig{Response: map[string]string{"result": "ok"}, StatusCode: 200})
+
+	// Create a body larger than maxBodySize (1MB)
+	largeBody := strings.Repeat("x", maxBodySize+1)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(largeBody))
+	res := httptest.NewRecorder()
+
+	app.webhookHandler(res, req)
+
+	// Should still succeed but body is truncated to maxBodySize
+	if res.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", res.Code)
+	}
+
+	// Verify the stored event has truncated body
+	if len(app.events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(app.events))
+	}
+	if len(app.events[0].Body) != maxBodySize {
+		t.Errorf("expected body length %d, got %d", maxBodySize, len(app.events[0].Body))
+	}
+}
+
+func TestResponseHandlerBodySizeLimit(t *testing.T) {
+	app := &App{}
+
+	// Create a body larger than maxBodySize (1MB)
+	largeBody := strings.Repeat("x", maxBodySize+1)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/response?key=test", strings.NewReader(largeBody))
+	res := httptest.NewRecorder()
+
+	app.responseHandler(res, req)
+
+	// Should fail with bad request since truncated body is invalid JSON
+	if res.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 (invalid JSON after truncation), got %d", res.Code)
+	}
+}
+
+func TestRulesHandlerPostBodySizeLimit(t *testing.T) {
+	app := &App{}
+
+	// Create a body larger than maxBodySize (1MB)
+	largeBody := strings.Repeat("x", maxBodySize+1)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/rules?key=test", strings.NewReader(largeBody))
+	res := httptest.NewRecorder()
+
+	app.rulesHandler(res, req)
+
+	// Should fail with bad request since truncated body is invalid JSON
+	if res.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 (invalid JSON after truncation), got %d", res.Code)
+	}
+}
+
+func TestRulesHandlerPutBodySizeLimit(t *testing.T) {
+	app := &App{}
+	app.addRule("test", Rule{Name: "Test", Condition: "true", Enabled: true})
+	rules := app.getRules("test")
+	ruleID := rules[0].ID
+
+	// Create a body larger than maxBodySize (1MB)
+	largeBody := strings.Repeat("x", maxBodySize+1)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/rules?key=test&id="+ruleID, strings.NewReader(largeBody))
+	res := httptest.NewRecorder()
+
+	app.rulesHandler(res, req)
+
+	// Should fail with bad request since truncated body is invalid JSON
+	if res.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 (invalid JSON after truncation), got %d", res.Code)
+	}
+}
+
+func TestWebhookHandlerWithinBodySizeLimit(t *testing.T) {
+	app := &App{}
+	app.setResponseConfig("default", ResponseConfig{Response: map[string]string{"result": "ok"}, StatusCode: 200})
+
+	// Create a body exactly at maxBodySize
+	body := strings.Repeat("x", maxBodySize)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(body))
+	res := httptest.NewRecorder()
+
+	app.webhookHandler(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", res.Code)
+	}
+
+	// Verify the stored event has full body
+	if len(app.events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(app.events))
+	}
+	if len(app.events[0].Body) != maxBodySize {
+		t.Errorf("expected body length %d, got %d", maxBodySize, len(app.events[0].Body))
+	}
+}

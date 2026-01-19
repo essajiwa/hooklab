@@ -1,4 +1,4 @@
-module essajiwa/webhook
+module essajiwa/hooklab
 
 go 1.25.5
 

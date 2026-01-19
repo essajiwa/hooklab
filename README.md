@@ -4,8 +4,10 @@
 
 **Mock APIs. Test webhooks. Debug integrations.**
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/essajiwa/hooklab)](https://goreportcard.com/report/github.com/essajiwa/hooklab)
 [![Go Version](https://img.shields.io/badge/Go-1.18+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![codecov](https://codecov.io/github/essajiwa/hooklab/graph/badge.svg?token=7RIETCHR4Z)](https://codecov.io/github/essajiwa/hooklab)
+[![codecov](https://codecov.io/github/essajiwa/hooklab/graph/badge.svg?token=7RIETCHR4Z)](https://codecov.io/github/essajiwa/hooklab)  
+[![Run Test](https://github.com/essajiwa/hooklab/actions/workflows/main.yml/badge.svg)](https://github.com/essajiwa/hooklab/actions/workflows/main.yml)
 [![License](https://img.shields.io/badge/License-MIT-3DA639)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/essajiwa/hooklab?style=social)](https://github.com/essajiwa/hooklab)
 [![GitHub forks](https://img.shields.io/github/forks/essajiwa/hooklab?style=social)](https://github.com/essajiwa/hooklab/fork)
@@ -204,6 +206,7 @@ services:
 | `POST` | `/api/rules?key={key}` | Create a new rule |
 | `PUT` | `/api/rules?key={key}&id={id}` | Update an existing rule |
 | `DELETE` | `/api/rules?key={key}&id={id}` | Delete a rule |
+| `GET` | `/api/keys` | List all known webhook keys |
 
 ---
 
@@ -218,6 +221,25 @@ services:
 | Real-time UI | ✅ | ✅ | ❌ |
 | Free & Open Source | ✅ | Freemium | Freemium |
 | Single binary | ✅ | N/A | ❌ |
+
+---
+
+## ⚠️ Security Considerations
+
+Hooklab is designed as a **development and testing tool**. Before deploying:
+
+| Concern | Status | Notes |
+|---------|--------|-------|
+| **Authentication** | ❌ None | All endpoints are public by default |
+| **Request Size** | ✅ Limited | Bodies capped at 1MB to prevent DoS |
+| **Data Exposure** | ⚠️ Caution | Request headers (including auth tokens) are stored and displayed |
+| **Rate Limiting** | ❌ None | No built-in rate limiting |
+
+**Recommendations:**
+- **Do NOT expose to the public internet** without a reverse proxy (nginx, Caddy) with authentication
+- Use behind a VPN or firewall for team access
+- Consider the systemd service with `RuntimeMaxSec` for periodic data reset
+- Sensitive headers (`Authorization`, `Cookie`, etc.) will be visible in the UI
 
 ---
 

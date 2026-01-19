@@ -9,6 +9,9 @@ import (
 	"github.com/expr-lang/expr"
 )
 
+// maxBodySize limits request body to 1MB to prevent DoS
+const maxBodySize = 1 << 20 // 1MB
+
 func (a *App) webhookHandler(w http.ResponseWriter, r *http.Request) {
 	key := webhookKeyFromPath(r.URL.Path)
 	// Ensure r.Body is not nil for io.ReadAll
@@ -16,8 +19,8 @@ func (a *App) webhookHandler(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.NoBody
 	}
 
-	// Read body
-	body, err := io.ReadAll(r.Body)
+	// Read body with size limit
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
 		http.Error(w, "Error reading request body", http.StatusInternalServerError)
 		return
@@ -88,7 +91,7 @@ func (a *App) responseHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Error creating response", http.StatusInternalServerError)
 		}
 	case http.MethodPost:
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 		if err != nil {
 			http.Error(w, "Error reading request body", http.StatusInternalServerError)
 			return
@@ -147,6 +150,16 @@ func responseKeyFromRequest(r *http.Request) string {
 	return key
 }
 
+func (a *App) keysHandler(w http.ResponseWriter, r *http.Request) {
+	keys := a.getKeys()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		"keys": keys,
+	}); err != nil {
+		http.Error(w, "Error creating response", http.StatusInternalServerError)
+	}
+}
+
 // Rules API handlers
 
 func (a *App) rulesHandler(w http.ResponseWriter, r *http.Request) {
@@ -167,7 +180,7 @@ func (a *App) rulesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case http.MethodPost:
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 		if err != nil {
 			http.Error(w, "Error reading request body", http.StatusInternalServerError)
 			return
@@ -209,7 +222,7 @@ func (a *App) rulesHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 		if err != nil {
 			http.Error(w, "Error reading request body", http.StatusInternalServerError)
 			return
