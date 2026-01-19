@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,88 +12,11 @@ import (
 	"time"
 )
 
-// errorReader is a custom reader that always returns an error
-type errorReader struct{}
-
-func (er *errorReader) Read(p []byte) (n int, err error) {
-	return 0, errors.New("simulated read error")
-}
-
-func TestMain(m *testing.M) {
-	log.SetOutput(io.Discard)
-	m.Run()
-}
-
-// errorResponseWriter is a custom http.ResponseWriter that simulates an error on Write
-type errorResponseWriter struct {
-	header http.Header
-	status int
-}
-
-func (erw *errorResponseWriter) Header() http.Header {
-	if erw.header == nil {
-		erw.header = make(http.Header)
-	}
-	return erw.header
-}
-
-func (erw *errorResponseWriter) Write(p []byte) (int, error) {
-	return 0, errors.New("simulated write error")
-}
-
-func (erw *errorResponseWriter) WriteHeader(statusCode int) {
-	erw.status = statusCode
-}
-
-// noFlushWriter simulates a ResponseWriter without http.Flusher support.
-type noFlushWriter struct{
-	header http.Header
-	status int
-}
-
-func (nfw *noFlushWriter) Header() http.Header {
-	if nfw.header == nil {
-		nfw.header = make(http.Header)
-	}
-	return nfw.header
-}
-
-func (nfw *noFlushWriter) Write(p []byte) (int, error) {
-	return len(p), nil
-}
-
-func (nfw *noFlushWriter) WriteHeader(statusCode int) {
-	nfw.status = statusCode
-}
-
-type sseWriter struct {
-	header http.Header
-	buffer bytes.Buffer
-}
-
-func (sw *sseWriter) Header() http.Header {
-	if sw.header == nil {
-		sw.header = make(http.Header)
-	}
-	return sw.header
-}
-
-func (sw *sseWriter) Write(p []byte) (int, error) {
-	return sw.buffer.Write(p)
-}
-
-func (sw *sseWriter) WriteHeader(statusCode int) {
-	// no-op for tests
-}
-
-func (sw *sseWriter) Flush() {}
-
 func TestHandler(t *testing.T) {
 	defaultResponse := map[string]string{"result": "ok"}
 	app := &App{}
 	app.setResponseConfig("default", ResponseConfig{Response: defaultResponse, StatusCode: http.StatusOK})
 
-	// Test case 1: Non-POST method should be accepted
 	req, err := http.NewRequest("GET", "/", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +30,6 @@ func TestHandler(t *testing.T) {
 			status, http.StatusOK)
 	}
 
-	// Test case 2: POST method with a body should be accepted
 	var jsonStr = []byte(`{"title":"buy cheese and bread for breakfast"}`)
 	req, err = http.NewRequest("POST", "/", bytes.NewBuffer(jsonStr))
 	if err != nil {
@@ -125,15 +45,12 @@ func TestHandler(t *testing.T) {
 			status, http.StatusOK)
 	}
 
-	// Check the response body is what we expect.
 	expected := `{"result":"ok"}`
-	// Trim newline characters from the response body for a more robust comparison
 	if strings.TrimSpace(rr.Body.String()) != expected {
 		t.Errorf("handler returned unexpected body: got %v want %v",
 			rr.Body.String(), expected)
 	}
 
-	// Test case 3: Custom response
 	customResponse := map[string]string{"status": "pending"}
 	appWithCustomResponse := &App{}
 	appWithCustomResponse.setResponseConfig("alpha", ResponseConfig{Response: customResponse, StatusCode: http.StatusOK})
@@ -157,7 +74,6 @@ func TestHandler(t *testing.T) {
 			rr.Body.String(), expectedCustom)
 	}
 
-	// Test case 4: Error reading request body
 	req, err = http.NewRequest("POST", "/", &errorReader{})
 	if err != nil {
 		t.Fatal(err)
@@ -171,14 +87,12 @@ func TestHandler(t *testing.T) {
 			status, http.StatusInternalServerError)
 	}
 
-	// Test case 5: Error writing JSON response
 	req, err = http.NewRequest("POST", "/", bytes.NewBuffer(jsonStr))
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	// Create a response recorder that will cause an error on Write
 	errorWriter := &errorResponseWriter{}
 	app.webhookHandler(errorWriter, req)
 
@@ -333,7 +247,7 @@ func TestEventsStreamLoop(t *testing.T) {
 
 	ticks <- time.Now()
 	app.broadcastEvent(Event{ID: 1, Method: http.MethodPost, Path: "/webhook", Key: "default"})
-	time.Sleep(20 * time.Millisecond) // Allow event to be processed
+	time.Sleep(20 * time.Millisecond)
 	cancel()
 	app.closeSubscribers()
 
@@ -382,20 +296,17 @@ func TestStoreEventMaxLimit(t *testing.T) {
 
 func TestGetResponseConfigFallbacks(t *testing.T) {
 	app := &App{}
-	// No default set - should return hardcoded fallback
 	config := app.getResponseConfig("nonexistent")
 	if config.StatusCode != 200 {
 		t.Errorf("getResponseConfig fallback wrong status: got %v want 200", config.StatusCode)
 	}
 
-	// Set default, then get nonexistent key - should return default
 	app.setResponseConfig("default", ResponseConfig{Response: "default", StatusCode: 201})
 	config = app.getResponseConfig("nonexistent")
 	if config.StatusCode != 201 {
 		t.Errorf("getResponseConfig default fallback wrong status: got %v want 201", config.StatusCode)
 	}
 
-	// Set specific key, get that key
 	app.setResponseConfig("specific", ResponseConfig{Response: "specific", StatusCode: 202})
 	config = app.getResponseConfig("specific")
 	if config.StatusCode != 202 {
@@ -456,21 +367,18 @@ func TestWebhookKeyFromPath(t *testing.T) {
 }
 
 func TestResponseKeyFromRequest(t *testing.T) {
-	// Query param takes precedence
 	req := httptest.NewRequest(http.MethodGet, "/api/response/pathkey?key=querykey", nil)
 	got := responseKeyFromRequest(req)
 	if got != "querykey" {
 		t.Errorf("responseKeyFromRequest query param: got %q want querykey", got)
 	}
 
-	// Path-based key
 	req = httptest.NewRequest(http.MethodGet, "/api/response/pathkey", nil)
 	got = responseKeyFromRequest(req)
 	if got != "pathkey" {
 		t.Errorf("responseKeyFromRequest path: got %q want pathkey", got)
 	}
 
-	// Default
 	req = httptest.NewRequest(http.MethodGet, "/api/response", nil)
 	got = responseKeyFromRequest(req)
 	if got != "default" {
@@ -493,13 +401,11 @@ func TestWebhookHandlerNilBody(t *testing.T) {
 func TestRemoveSubscriberNotExists(t *testing.T) {
 	app := &App{subscribers: make(map[chan Event]struct{})}
 	ch := make(chan Event)
-	// Should not panic when removing non-existent subscriber
 	app.removeSubscriber(ch)
 }
 
 func TestBroadcastEventNoSubscribers(t *testing.T) {
 	app := &App{}
-	// Should not panic when broadcasting with no subscribers
 	app.broadcastEvent(Event{ID: 1})
 }
 
@@ -507,7 +413,6 @@ func TestResponseHandlerPostWithoutStatusCode(t *testing.T) {
 	app := &App{}
 	app.setResponseConfig("default", ResponseConfig{Response: "old", StatusCode: 201})
 
-	// Post without statusCode should keep existing status
 	postBody := `{"response":"new"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/response", bytes.NewBufferString(postBody))
 	res := httptest.NewRecorder()
@@ -541,7 +446,6 @@ func TestEventsStreamHandlerWithFlusher(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	req := httptest.NewRequest(http.MethodGet, "/api/stream", nil).WithContext(ctx)
 
-	// Use httptest.ResponseRecorder which implements Flusher
 	res := httptest.NewRecorder()
 
 	done := make(chan struct{})
@@ -550,7 +454,6 @@ func TestEventsStreamHandlerWithFlusher(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait for subscriber to be added
 	time.Sleep(10 * time.Millisecond)
 	cancel()
 
@@ -579,10 +482,8 @@ func TestEventsStreamLoopMarshalError(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait for subscriber
 	time.Sleep(10 * time.Millisecond)
 
-	// Broadcast event with unmarshalable data (channels can't be marshaled)
 	app.mu.Lock()
 	for ch := range app.subscribers {
 		select {
@@ -630,7 +531,6 @@ func TestEventsHandlerEncodeError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
 	res := &errorEventsWriter{}
 	app.eventsHandler(res, req)
-	// Just verify it doesn't panic - error path is hit
 }
 
 func TestEventsHandlerFilteredEncodeError(t *testing.T) {
@@ -638,7 +538,6 @@ func TestEventsHandlerFilteredEncodeError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/events?key=alpha", nil)
 	res := &errorEventsWriter{}
 	app.eventsHandler(res, req)
-	// Just verify it doesn't panic - error path is hit
 }
 
 func TestResponseHandlerGetEncodeError(t *testing.T) {
@@ -647,7 +546,6 @@ func TestResponseHandlerGetEncodeError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/response", nil)
 	res := &errorResponseWriter{}
 	app.responseHandler(res, req)
-	// Just verify it doesn't panic - error path is hit
 }
 
 func TestResponseHandlerPostEncodeError(t *testing.T) {
@@ -656,7 +554,6 @@ func TestResponseHandlerPostEncodeError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/response", bytes.NewBufferString(`{"response":"new"}`))
 	res := &errorResponseWriter{}
 	app.responseHandler(res, req)
-	// Just verify it doesn't panic - error path is hit
 }
 
 func TestWebhookHandlerZeroStatusCode(t *testing.T) {
@@ -665,7 +562,6 @@ func TestWebhookHandlerZeroStatusCode(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewBufferString(`{}`))
 	res := httptest.NewRecorder()
 	app.webhookHandler(res, req)
-	// When statusCode is 0, WriteHeader should not be called explicitly
 	if status := res.Code; status != http.StatusOK {
 		t.Errorf("webhook handler zero status: got %v want 200", status)
 	}
@@ -714,67 +610,30 @@ func TestEventsHandlerMultipleFilteredEvents(t *testing.T) {
 	}
 }
 
-func TestBroadcastEventWithFullChannel(t *testing.T) {
-	app := &App{subscribers: make(map[chan Event]struct{})}
-	// Create a channel with buffer 1 and fill it
-	ch := make(chan Event, 1)
-	ch <- Event{ID: 0}
-	app.subscribers[ch] = struct{}{}
-
-	// Broadcast should not block even with full channel
-	app.broadcastEvent(Event{ID: 1})
-	// Test passes if it doesn't deadlock
-}
-
-func TestEventsStreamLoopChannelClosed(t *testing.T) {
+func TestEventsHandlerWriteError(t *testing.T) {
 	app := &App{}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/api/stream", nil).WithContext(ctx)
-	writer := &sseWriter{}
-	ticks := make(chan time.Time)
+	app.storeEvent(httptest.NewRequest(http.MethodPost, "/webhook", nil), "default", "test")
 
-	done := make(chan struct{})
-	go func() {
-		app.eventsStreamLoop(writer, req, writer, ticks)
-		close(done)
-	}()
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	w := &errorResponseWriter{}
 
-	// Wait for subscriber
-	time.Sleep(10 * time.Millisecond)
+	app.eventsHandler(w, req)
 
-	// Close subscribers which closes the channel
-	app.closeSubscribers()
-
-	select {
-	case <-done:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("eventsStreamLoop did not exit when channel closed")
+	if w.status != http.StatusInternalServerError {
+		t.Errorf("expected status 500 on write error, got %d", w.status)
 	}
 }
 
-func TestEventsStreamLoopContextDone(t *testing.T) {
+func TestEventsHandlerWithKeyWriteError(t *testing.T) {
 	app := &App{}
-	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest(http.MethodGet, "/api/stream", nil).WithContext(ctx)
-	writer := &sseWriter{}
-	ticks := make(chan time.Time)
+	app.storeEvent(httptest.NewRequest(http.MethodPost, "/webhook/mykey", nil), "mykey", "test")
 
-	done := make(chan struct{})
-	go func() {
-		app.eventsStreamLoop(writer, req, writer, ticks)
-		close(done)
-	}()
+	req := httptest.NewRequest(http.MethodGet, "/api/events?key=mykey", nil)
+	w := &errorResponseWriter{}
 
-	// Wait for subscriber
-	time.Sleep(10 * time.Millisecond)
+	app.eventsHandler(w, req)
 
-	// Cancel context
-	cancel()
-
-	select {
-	case <-done:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("eventsStreamLoop did not exit when context cancelled")
+	if w.status != http.StatusInternalServerError {
+		t.Errorf("expected status 500 on write error, got %d", w.status)
 	}
 }

@@ -1,14 +1,16 @@
 # Hooklab Architecture
 
 ## Purpose
-Hooklab is a Go HTTP webhook server that listens on port **8080**, records incoming requests, and returns a configurable JSON response. It ships with an embedded React + Tailwind monitoring UI.
+Hooklab is a Go HTTP webhook server that listens on port **8080**, records incoming requests, and returns a configurable JSON response. It ships with an embedded React + Tailwind monitoring UI and a powerful expression-based rule engine.
 
 ## High-Level Overview
 - **Single binary** starts an HTTP server on `:8080` (configurable via `-port`).
 - **Webhook routes** (`/webhook` and `/webhook/{key}`) accept **all HTTP methods**.
 - **Per-key response config** — each key has its own JSON response + status code.
+- **Rule engine** — expression-based conditional responses per webhook key.
 - **Configurable response** via API or `-response` flag (sets default key).
 - **Embedded UI** served from `/` via `go:embed` with key selector.
+- **Rules UI** at `/rules.html` for managing conditional response rules.
 - **Realtime stream** via SSE (`/api/stream`) with heartbeat pings.
 - **Graceful shutdown** on SIGINT/SIGTERM with SSE cleanup.
 
@@ -23,18 +25,21 @@ Hooklab is a Go HTTP webhook server that listens on port **8080**, records incom
    - Extract key from path (`/webhook/{key}` → key, `/webhook` → "default").
    - Store headers + body as an event with key association.
    - Broadcast event via SSE.
-   - Respond with JSON from `App.responses[key]` (falls back to default).
+   - **Evaluate rules** for the key (first matching rule wins).
+   - If no rule matches, respond with JSON from `App.responses[key]` (falls back to default).
 
 3. **Shutdown**
    - Listen for OS signals (SIGINT/SIGTERM).
    - Close SSE subscribers and shutdown server with a timeout context.
 
 ## Components
-- **`app.go`**: `App` state, `ResponseConfig` per key, events, subscriber management.
-- **`handlers.go`**: Webhook + events + response handlers, key extraction helpers.
+- **`app.go`**: `App` state, `ResponseConfig` per key, `Rule` struct, events, subscriber management, rule evaluation with [expr](https://github.com/expr-lang/expr).
+- **`handlers.go`**: Webhook + events + response + rules handlers, key extraction helpers.
 - **`sse.go`**: SSE handler + stream loop (heartbeat + events).
 - **`server.go`**: Embedded web assets and server wiring.
 - **`main.go`**: Flags, startup, graceful shutdown.
+- **`web/index.html`**: Main monitoring UI with response configuration.
+- **`web/rules.html`**: Rule configuration UI with expression editor.
 
 ## Configuration
 - `-response`: JSON string for default key (default: `{"result":"ok"}`).
@@ -43,14 +48,33 @@ Hooklab is a Go HTTP webhook server that listens on port **8080**, records incom
 - `/api/response?key={key}` (POST): accepts `{ response, statusCode }` to update config for that key.
 - `/api/events?key={key}` (GET): filter events by key.
 
-## Testing
-Tests cover (84%+ coverage):
-- Default and custom response bodies.
-- Per-key response config and fallback logic.
-- Status code responses and response config endpoints.
-- Key extraction from path and query params.
-- SSE stream loop (ping + event) and subscriber cleanup.
-- Error handling for body read, JSON decoding, and JSON write failures.
+## Rule Engine
+Rules allow conditional responses based on request data. See [RULES.md](RULES.md) for full documentation.
+
+### Rule Structure
+```go
+type Rule struct {
+    ID         string      // Auto-generated unique ID
+    Name       string      // Human-readable name
+    Condition  string      // expr expression (e.g., "body.amount > 100")
+    Response   interface{} // JSON response to return
+    StatusCode int         // HTTP status code
+    Priority   int         // Lower = higher priority
+    Enabled    bool        // Toggle rule on/off
+}
+```
+
+### Evaluation Flow
+1. Rules are sorted by priority (ascending).
+2. Each enabled rule's condition is evaluated against `{ body, method, headers }`.
+3. First matching rule's response is returned.
+4. If no rule matches, default response config is used.
+
+### API Endpoints
+- `GET /api/rules?key={key}` — List rules for a key.
+- `POST /api/rules?key={key}` — Create rule (validates expression).
+- `PUT /api/rules?key={key}&id={id}` — Update rule.
+- `DELETE /api/rules?key={key}&id={id}` — Delete rule.
 
 ## Extension Ideas
 - Add route-specific handlers (e.g., `/health`).

@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/expr-lang/expr"
 )
 
 func (a *App) webhookHandler(w http.ResponseWriter, r *http.Request) {
@@ -24,7 +26,15 @@ func (a *App) webhookHandler(w http.ResponseWriter, r *http.Request) {
 
 	event := a.storeEvent(r, key, string(body))
 	a.broadcastEvent(event)
-	config := a.getResponseConfig(key)
+
+	// Try to match a rule first
+	ruleConfig, _ := a.evaluateRules(key, string(body), r.Method, r.Header)
+	var config ResponseConfig
+	if ruleConfig != nil {
+		config = *ruleConfig
+	} else {
+		config = a.getResponseConfig(key)
+	}
 
 	// Create JSON response
 	w.Header().Set("Content-Type", "application/json")
@@ -135,4 +145,122 @@ func responseKeyFromRequest(r *http.Request) string {
 		return "default"
 	}
 	return key
+}
+
+// Rules API handlers
+
+func (a *App) rulesHandler(w http.ResponseWriter, r *http.Request) {
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		key = "default"
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		rules := a.getRules(key)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"rules": rules,
+			"key":   key,
+		}); err != nil {
+			http.Error(w, "Error creating response", http.StatusInternalServerError)
+		}
+
+	case http.MethodPost:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Error reading request body", http.StatusInternalServerError)
+			return
+		}
+		defer r.Body.Close()
+
+		var rule Rule
+		if err := json.Unmarshal(body, &rule); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		// Validate the expression
+		if rule.Condition != "" {
+			env := map[string]interface{}{
+				"body":    map[string]interface{}{},
+				"method":  "",
+				"headers": map[string][]string{},
+			}
+			if _, err := expr.Compile(rule.Condition, expr.Env(env), expr.AsBool()); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error": "Invalid expression: " + err.Error(),
+				})
+				return
+			}
+		}
+
+		created := a.addRule(key, rule)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(created)
+
+	case http.MethodPut:
+		ruleID := r.URL.Query().Get("id")
+		if ruleID == "" {
+			http.Error(w, "Rule ID required", http.StatusBadRequest)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "Error reading request body", http.StatusInternalServerError)
+			return
+		}
+		defer r.Body.Close()
+
+		var rule Rule
+		if err := json.Unmarshal(body, &rule); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		// Validate the expression
+		if rule.Condition != "" {
+			env := map[string]interface{}{
+				"body":    map[string]interface{}{},
+				"method":  "",
+				"headers": map[string][]string{},
+			}
+			if _, err := expr.Compile(rule.Condition, expr.Env(env), expr.AsBool()); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error": "Invalid expression: " + err.Error(),
+				})
+				return
+			}
+		}
+
+		if a.updateRule(key, ruleID, rule) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		} else {
+			http.Error(w, "Rule not found", http.StatusNotFound)
+		}
+
+	case http.MethodDelete:
+		ruleID := r.URL.Query().Get("id")
+		if ruleID == "" {
+			http.Error(w, "Rule ID required", http.StatusBadRequest)
+			return
+		}
+
+		if a.deleteRule(key, ruleID) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		} else {
+			http.Error(w, "Rule not found", http.StatusNotFound)
+		}
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }

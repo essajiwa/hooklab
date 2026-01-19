@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Webhook Monitor</title>
+    <title>HookLab - Webhook Monitor & API Response Mocking</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -28,27 +28,62 @@
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css"
     />
-    <style>
-      pre code,
-      pre code span {
-        white-space: pre-wrap;
-        word-break: break-word;
-        overflow-wrap: anywhere;
-      }
-    </style>
     <link
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=Playfair+Display:wght@500;600&display=swap"
       rel="stylesheet"
     />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css" />
+    <style>
+      .CodeMirror {
+        background: transparent !important;
+        color: #eceff6 !important;
+        font-family: ui-monospace, monospace !important;
+        font-size: 0.75rem !important;
+        height: 16rem !important;
+      }
+      .CodeMirror-scroll {
+        overflow-y: auto !important;
+        max-height: 16rem;
+      }
+      .CodeMirror-gutters {
+        background: transparent !important;
+        border-right: 1px solid rgba(255,255,255,0.1) !important;
+      }
+      .CodeMirror-linenumber {
+        color: rgba(236,239,246,0.4) !important;
+      }
+      .CodeMirror-cursor {
+        border-left-color: #ff7a59 !important;
+      }
+      .CodeMirror-selected {
+        background: rgba(255,122,89,0.2) !important;
+      }
+      .cm-error {
+        text-decoration: wavy underline red;
+      }
+      .json-error-msg {
+        color: #ff6b6b;
+        font-size: 0.7rem;
+        margin-top: 0.5rem;
+      }
+    </style>
   </head>
   <body class="min-h-screen bg-gradient-to-br from-ink via-night to-ink text-mist font-body">
     <div id="root"></div>
 
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/lint/lint.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/lint/json-lint.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsonlint/1.6.0/jsonlint.min.js"></script>
 
     <script type="text/babel">
       const { useEffect, useMemo, useRef, useState } = React;
@@ -96,6 +131,9 @@
         const [statusCode, setStatusCode] = useState(200);
         const editorRef = useRef(null);
         const editorScrollRef = useRef(null);
+        const cmEditorRef = useRef(null);
+        const cmInstanceRef = useRef(null);
+        const [jsonError, setJsonError] = useState("");
         const statusOptions = [
           { code: 200, label: "200 OK" },
           { code: 201, label: "201 Created" },
@@ -171,16 +209,53 @@
         }, [formattedEvents]);
 
         useEffect(() => {
-          if (!window.Prism || !editorRef.current) {
-            return;
+          if (!cmEditorRef.current || cmInstanceRef.current) return;
+          
+          cmInstanceRef.current = CodeMirror(cmEditorRef.current, {
+            value: responseBody,
+            mode: { name: "javascript", json: true },
+            theme: "material-darker",
+            lineNumbers: true,
+            matchBrackets: true,
+            autoCloseBrackets: true,
+            tabSize: 2,
+            lineWrapping: true,
+          });
+          
+          cmInstanceRef.current.on("change", (cm) => {
+            const value = cm.getValue();
+            setResponseBody(value);
+            try {
+              JSON.parse(value);
+              setJsonError("");
+            } catch (err) {
+              setJsonError(err.message);
+            }
+          });
+        }, []);
+
+        useEffect(() => {
+          if (cmInstanceRef.current && cmInstanceRef.current.getValue() !== responseBody) {
+            cmInstanceRef.current.setValue(responseBody);
           }
-          const highlighted = window.Prism.highlight(
-            responseBody,
-            window.Prism.languages.json,
-            "json"
-          );
-          editorRef.current.innerHTML = highlighted + "\n";
+          try {
+            JSON.parse(responseBody);
+            setJsonError("");
+          } catch (err) {
+            setJsonError(err.message);
+          }
         }, [responseBody]);
+
+        const formatJson = () => {
+          try {
+            const parsed = JSON.parse(responseBody);
+            const formatted = JSON.stringify(parsed, null, 2);
+            setResponseBody(formatted);
+            setJsonError("");
+          } catch (err) {
+            setJsonError(err.message);
+          }
+        };
 
         const handleSave = async (event) => {
           event.preventDefault();
@@ -218,10 +293,10 @@
             <header className="mb-10 flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
               <div>
                 <p className="uppercase tracking-[0.3em] text-sm text-lagoon">
-                  Webhook Monitor
+                  Webhook Monitor & API Response Mocking
                 </p>
                 <h1 className="font-display text-4xl md:text-5xl text-mist">
-                  Observe every incoming call in real time
+                Hook<span className="text-flare">Lab</span>
                 </h1>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/5 px-6 py-4 backdrop-blur">
@@ -304,7 +379,7 @@
                             #{event.id}
                           </span>
                         </div>
-                        <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-black/60 p-3 text-xs">
+                        <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-black/60 p-3">
                           <code className="language-json text-mist/90">
                             {formatBody(event.body)}
                           </code>
@@ -336,7 +411,15 @@
 
               <aside className="space-y-6 md:w-[30%] md:flex-shrink-0">
                 <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
-                  <h2 className="font-display text-2xl text-mist mb-2">Configure response</h2>
+                  <div className="flex items-center justify-between mb-2">
+                    <h2 className="font-display text-2xl text-mist">Configure response</h2>
+                    <a
+                      href={`/rules.html?key=${encodeURIComponent(webhookKey)}`}
+                      className="rounded-full border border-lagoon/30 bg-lagoon/10 px-3 py-1 text-xs text-lagoon hover:bg-lagoon/20"
+                    >
+                      ⚡ Rules
+                    </a>
+                  </div>
                   <p className="text-xs text-mist/50 mb-4">for <code className="text-flare">/webhook/{webhookKey}</code></p>
                   <form className="space-y-4" onSubmit={handleSave}>
                     <label className="text-sm text-mist/70">JSON response body</label>
@@ -354,32 +437,28 @@
                         ))}
                       </select>
                     </div>
-                    <div className="relative text-xs">
-                      <pre
-                        ref={editorScrollRef}
-                        className="max-h-56 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-mist/90"
-                      >
-                        <code ref={editorRef} className="language-json"></code>
-                      </pre>
-                      <textarea
-                        className="absolute inset-0 h-full w-full resize-none bg-transparent p-4 font-mono text-transparent caret-mist/80 outline-none"
-                        value={responseBody}
-                        spellCheck="false"
-                        onChange={(event) => setResponseBody(event.target.value)}
-                        onScroll={(event) => {
-                          if (!editorScrollRef.current) return;
-                          editorScrollRef.current.scrollTop = event.target.scrollTop;
-                          editorScrollRef.current.scrollLeft = event.target.scrollLeft;
-                        }}
-                      />
+                    <div className="rounded-xl border border-white/10 bg-black/40 overflow-hidden">
+                      <div ref={cmEditorRef}></div>
+                      {jsonError && (
+                        <div className="json-error-msg px-3 pb-2">⚠ {jsonError}</div>
+                      )}
                     </div>
-                    <div className="flex items-center justify-between">
-                      <button
-                        type="submit"
-                        className="rounded-full bg-flare px-5 py-2 text-sm font-semibold text-ink"
-                      >
-                        Save response
-                      </button>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex gap-2">
+                        <button
+                          type="submit"
+                          className="rounded-full bg-flare px-5 py-2 text-sm font-semibold text-ink"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={formatJson}
+                          className="rounded-full border border-white/10 bg-white/10 px-4 py-2 text-sm text-mist hover:bg-white/20"
+                        >
+                          Format
+                        </button>
+                      </div>
                       <span className="text-xs text-mist/70">{saveState}</span>
                     </div>
                   </form>
