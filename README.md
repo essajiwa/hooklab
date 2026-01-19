@@ -5,7 +5,7 @@
 **Mock APIs. Test webhooks. Debug integrations.**
 
 [![Go Version](https://img.shields.io/badge/Go-1.18+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![codecov](https://codecov.io/github/essajiwa/webhook-test/graph/badge.svg?token=LL7FKM9CL7)](https://codecov.io/github/essajiwa/webhook-test)
+[![codecov](https://codecov.io/github/essajiwa/hooklab/graph/badge.svg?token=7RIETCHR4Z)](https://codecov.io/github/essajiwa/hooklab)
 [![License](https://img.shields.io/badge/License-MIT-3DA639)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/essajiwa/hooklab?style=social)](https://github.com/essajiwa/hooklab)
 [![GitHub forks](https://img.shields.io/github/forks/essajiwa/hooklab?style=social)](https://github.com/essajiwa/hooklab/fork)
