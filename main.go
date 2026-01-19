@@ -1,3 +1,16 @@
+// Hooklab is a lightweight, self-hosted webhook testing and API mocking tool.
+//
+// It provides real-time webhook capture, custom response configuration,
+// and a rule engine for conditional responses based on request content.
+//
+// Usage:
+//
+//	hooklab -port 8080 -response '{"result":"ok"}'
+//
+// Flags:
+//
+//	-port      Port for the HTTP server (default: 8080)
+//	-response  JSON string to be returned by the webhook handler
 package main
 
 import (

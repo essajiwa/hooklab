@@ -1,11 +1,16 @@
 package main
 
+// This file contains Server-Sent Events (SSE) handlers for real-time event streaming.
+
 import (
 	"encoding/json"
 	"net/http"
 	"time"
 )
 
+// eventsStreamHandler handles GET /api/stream requests for Server-Sent Events.
+// It establishes a persistent connection and streams webhook events in real-time.
+// Sends heartbeat pings every 25 seconds to keep the connection alive.
 func (a *App) eventsStreamHandler(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -23,6 +28,8 @@ func (a *App) eventsStreamHandler(w http.ResponseWriter, r *http.Request) {
 	a.eventsStreamLoop(w, r, flusher, keepAlive.C)
 }
 
+// eventsStreamLoop is the main event loop for SSE connections.
+// It listens for new events, heartbeat ticks, and context cancellation.
 func (a *App) eventsStreamLoop(w http.ResponseWriter, r *http.Request, flusher http.Flusher, ticks <-chan time.Time) {
 	subscriber := a.addSubscriber()
 	defer a.removeSubscriber(subscriber)

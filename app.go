@@ -1,5 +1,8 @@
 package main
 
+// This file contains the core application state and business logic for Hooklab.
+// It manages webhook events, response configurations, rules, and SSE subscribers.
+
 import (
 	"encoding/json"
 	"fmt"
@@ -11,7 +14,9 @@ import (
 	"github.com/expr-lang/expr"
 )
 
-// App holds the application configuration and dependencies.
+// App holds the application state including webhook events, response configurations,
+// conditional rules, and SSE subscribers. All fields are protected by a mutex for
+// concurrent access safety.
 type App struct {
 	responses   map[string]ResponseConfig
 	rules       map[string][]Rule // rules per webhook key
@@ -22,13 +27,16 @@ type App struct {
 	subscribers map[chan Event]struct{}
 }
 
+// ResponseConfig defines the response to return for a webhook request.
+// Response can be any JSON-serializable value, and StatusCode is the HTTP status.
 type ResponseConfig struct {
-	Response    interface{}
-	ResponseRaw string
-	StatusCode  int
+	Response    interface{} // JSON response body
+	ResponseRaw string      // Raw JSON string of the response
+	StatusCode  int         // HTTP status code (e.g., 200, 404)
 }
 
-// Rule represents a conditional response rule
+// Rule represents a conditional response rule that can override the default response
+// based on request content. Rules are evaluated using the expr expression language.
 type Rule struct {
 	ID         string      `json:"id"`
 	Name       string      `json:"name"`
@@ -39,20 +47,25 @@ type Rule struct {
 	Enabled    bool        `json:"enabled"`
 }
 
+// Event represents a captured webhook request with all its metadata.
+// Events are stored in memory and broadcast to SSE subscribers in real-time.
 type Event struct {
-	ID        int                 `json:"id"`
-	Timestamp time.Time           `json:"timestamp"`
-	Method    string              `json:"method"`
-	Path      string              `json:"path"`
-	Key       string              `json:"key"`
-	Headers   map[string][]string `json:"headers"`
-	Body      string              `json:"body"`
+	ID        int                 `json:"id"`        // Unique event identifier
+	Timestamp time.Time           `json:"timestamp"` // When the event was received
+	Method    string              `json:"method"`    // HTTP method (GET, POST, etc.)
+	Path      string              `json:"path"`      // Request path
+	Key       string              `json:"key"`       // Webhook key from path
+	Headers   map[string][]string `json:"headers"`   // Request headers
+	Body      string              `json:"body"`      // Request body
 }
 
+// EventsResponse is the JSON response structure for the /api/events endpoint.
 type EventsResponse struct {
 	Events []Event `json:"events"`
 }
 
+// storeEvent captures an incoming webhook request and stores it in memory.
+// It maintains a maximum of 50 events, discarding the oldest when the limit is reached.
 func (a *App) storeEvent(r *http.Request, key, body string) Event {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -77,6 +90,9 @@ func (a *App) storeEvent(r *http.Request, key, body string) Event {
 	return event
 }
 
+// getResponseConfig returns the response configuration for the given webhook key.
+// If no configuration exists for the key, it falls back to "default", then to a
+// hardcoded fallback response.
 func (a *App) getResponseConfig(key string) ResponseConfig {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -101,6 +117,8 @@ func (a *App) getResponseConfig(key string) ResponseConfig {
 	}
 }
 
+// setResponseConfig stores a response configuration for the given webhook key.
+// An empty key defaults to "default".
 func (a *App) setResponseConfig(key string, config ResponseConfig) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -114,6 +132,8 @@ func (a *App) setResponseConfig(key string, config ResponseConfig) {
 	a.responses[key] = config
 }
 
+// addSubscriber creates a new SSE subscriber channel and registers it.
+// Events will be broadcast to this channel until removeSubscriber is called.
 func (a *App) addSubscriber() chan Event {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -127,6 +147,7 @@ func (a *App) addSubscriber() chan Event {
 	return ch
 }
 
+// removeSubscriber unregisters an SSE subscriber and closes its channel.
 func (a *App) removeSubscriber(ch chan Event) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -138,6 +159,8 @@ func (a *App) removeSubscriber(ch chan Event) {
 	close(ch)
 }
 
+// broadcastEvent sends an event to all registered SSE subscribers.
+// Non-blocking: if a subscriber's channel is full, the event is dropped for that subscriber.
 func (a *App) broadcastEvent(event Event) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -150,6 +173,7 @@ func (a *App) broadcastEvent(event Event) {
 	}
 }
 
+// closeSubscribers closes all SSE subscriber channels during shutdown.
 func (a *App) closeSubscribers() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -160,7 +184,8 @@ func (a *App) closeSubscribers() {
 	a.subscribers = make(map[chan Event]struct{})
 }
 
-// getKeys returns all known webhook keys from events, responses, and rules
+// getKeys returns a sorted list of all known webhook keys.
+// Keys are collected from events, responses, and rules. The "default" key is always included.
 func (a *App) getKeys() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -194,8 +219,8 @@ func (a *App) getKeys() []string {
 	return keys
 }
 
-// Rule management methods
-
+// getRules returns all rules for the given webhook key, sorted by priority (ascending).
+// Lower priority values are evaluated first.
 func (a *App) getRules(key string) []Rule {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -218,6 +243,7 @@ func (a *App) getRules(key string) []Rule {
 	return sorted
 }
 
+// setRules replaces all rules for the given webhook key.
 func (a *App) setRules(key string, rules []Rule) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -228,6 +254,7 @@ func (a *App) setRules(key string, rules []Rule) {
 	a.rules[key] = rules
 }
 
+// addRule adds a new rule for the given webhook key and assigns it a unique ID.
 func (a *App) addRule(key string, rule Rule) Rule {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -243,6 +270,7 @@ func (a *App) addRule(key string, rule Rule) Rule {
 	return rule
 }
 
+// updateRule updates an existing rule by ID. Returns true if the rule was found and updated.
 func (a *App) updateRule(key string, ruleID string, updated Rule) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -263,6 +291,7 @@ func (a *App) updateRule(key string, ruleID string, updated Rule) bool {
 	return false
 }
 
+// deleteRule removes a rule by ID. Returns true if the rule was found and deleted.
 func (a *App) deleteRule(key string, ruleID string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -281,8 +310,13 @@ func (a *App) deleteRule(key string, ruleID string) bool {
 	return false
 }
 
-// evaluateRules checks all rules for a key and returns the matching response
-// Returns nil if no rule matches
+// evaluateRules checks all enabled rules for a key and returns the first matching response.
+// Rules are evaluated in priority order. The expression environment includes:
+//   - body: parsed JSON body (or raw string if not valid JSON)
+//   - method: HTTP method string
+//   - headers: map of header names to values
+//
+// Returns nil if no rule matches.
 func (a *App) evaluateRules(key string, body string, method string, headers map[string][]string) (*ResponseConfig, error) {
 	rules := a.getRules(key)
 

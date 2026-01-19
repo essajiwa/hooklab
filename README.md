@@ -253,9 +253,19 @@ Look for issues labeled [`good first issue`](https://github.com/essajiwa/hooklab
 
 ## Built With
 
+### Backend
 - **[Go](https://go.dev/)** — Fast, reliable backend
-- **[React](https://react.dev/)** — Interactive UI
-- **[Tailwind CSS](https://tailwindcss.com/)** — Beautiful styling
+- **[expr](https://github.com/expr-lang/expr)** — Expression evaluation for rule engine
+
+### Frontend
+- **[React](https://react.dev/)** — Interactive UI (via CDN)
+- **[Tailwind CSS](https://tailwindcss.com/)** — Utility-first styling
+- **[CodeMirror](https://codemirror.net/)** — JSON editor with syntax highlighting
+- **[Prism.js](https://prismjs.com/)** — Code syntax highlighting
+- **[Lucide Icons](https://lucide.dev/)** — Beautiful icons
+- **[Google Fonts](https://fonts.google.com/)** — IBM Plex Sans & Playfair Display
+
+### Tools
 - **AI Assistance** — Built with help from [Claude](https://claude.ai/) & [Windsurf](https://codeium.com/windsurf)
 
 ---

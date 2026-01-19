@@ -1,5 +1,7 @@
 package main
 
+// This file contains the HTTP server setup and route registration.
+
 import (
 	"embed"
 	"fmt"
@@ -10,6 +12,8 @@ import (
 //go:embed web/*
 var webFS embed.FS
 
+// newServer creates and configures the HTTP server with all routes.
+// It registers webhook handlers, API endpoints, and serves static files from the embedded filesystem.
 func newServer(app *App, port int) (*http.Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/webhook", app.webhookHandler)

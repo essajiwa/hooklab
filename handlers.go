@@ -1,5 +1,7 @@
 package main
 
+// This file contains HTTP handlers for the Hooklab API endpoints.
+
 import (
 	"encoding/json"
 	"io"
@@ -9,9 +11,12 @@ import (
 	"github.com/expr-lang/expr"
 )
 
-// maxBodySize limits request body to 1MB to prevent DoS
+// maxBodySize limits request body to 1MB to prevent DoS attacks.
 const maxBodySize = 1 << 20 // 1MB
 
+// webhookHandler handles incoming webhook requests at /webhook and /webhook/{key}.
+// It stores the event, broadcasts it to SSE subscribers, evaluates rules, and returns
+// the appropriate response.
 func (a *App) webhookHandler(w http.ResponseWriter, r *http.Request) {
 	key := webhookKeyFromPath(r.URL.Path)
 	// Ensure r.Body is not nil for io.ReadAll
@@ -49,6 +54,8 @@ func (a *App) webhookHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// eventsHandler handles GET /api/events requests.
+// Returns all stored events, optionally filtered by the "key" query parameter.
 func (a *App) eventsHandler(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -76,6 +83,9 @@ func (a *App) eventsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// responseHandler handles GET and POST requests to /api/response.
+// GET returns the current response configuration for a key.
+// POST updates the response configuration for a key.
 func (a *App) responseHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -129,6 +139,8 @@ func (a *App) responseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// webhookKeyFromPath extracts the webhook key from a URL path.
+// Returns "default" if no key is specified.
 func webhookKeyFromPath(path string) string {
 	key := strings.TrimPrefix(path, "/webhook")
 	key = strings.TrimPrefix(key, "/")
@@ -138,6 +150,8 @@ func webhookKeyFromPath(path string) string {
 	return key
 }
 
+// responseKeyFromRequest extracts the response key from a request.
+// Checks the "key" query parameter first, then the URL path.
 func responseKeyFromRequest(r *http.Request) string {
 	if key := r.URL.Query().Get("key"); key != "" {
 		return key
@@ -150,6 +164,8 @@ func responseKeyFromRequest(r *http.Request) string {
 	return key
 }
 
+// keysHandler handles GET /api/keys requests.
+// Returns a JSON array of all known webhook keys.
 func (a *App) keysHandler(w http.ResponseWriter, r *http.Request) {
 	keys := a.getKeys()
 	w.Header().Set("Content-Type", "application/json")
@@ -160,8 +176,9 @@ func (a *App) keysHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Rules API handlers
-
+// rulesHandler handles CRUD operations for conditional response rules at /api/rules.
+// Supports GET (list), POST (create), PUT (update), and DELETE operations.
+// The "key" query parameter specifies which webhook key's rules to manage.
 func (a *App) rulesHandler(w http.ResponseWriter, r *http.Request) {
 	key := r.URL.Query().Get("key")
 	if key == "" {
@@ -182,6 +199,7 @@ func (a *App) rulesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleGetRules returns all rules for the given webhook key.
 func (a *App) handleGetRules(w http.ResponseWriter, key string) {
 	rules := a.getRules(key)
 	w.Header().Set("Content-Type", "application/json")
@@ -193,6 +211,7 @@ func (a *App) handleGetRules(w http.ResponseWriter, key string) {
 	}
 }
 
+// handleCreateRule creates a new rule for the given webhook key.
 func (a *App) handleCreateRule(w http.ResponseWriter, r *http.Request, key string) {
 	rule, ok := a.parseAndValidateRule(w, r)
 	if !ok {
@@ -205,6 +224,7 @@ func (a *App) handleCreateRule(w http.ResponseWriter, r *http.Request, key strin
 	json.NewEncoder(w).Encode(created)
 }
 
+// handleUpdateRule updates an existing rule identified by the "id" query parameter.
 func (a *App) handleUpdateRule(w http.ResponseWriter, r *http.Request, key string) {
 	ruleID := r.URL.Query().Get("id")
 	if ruleID == "" {
@@ -225,6 +245,7 @@ func (a *App) handleUpdateRule(w http.ResponseWriter, r *http.Request, key strin
 	}
 }
 
+// handleDeleteRule removes a rule identified by the "id" query parameter.
 func (a *App) handleDeleteRule(w http.ResponseWriter, r *http.Request, key string) {
 	ruleID := r.URL.Query().Get("id")
 	if ruleID == "" {
@@ -240,6 +261,9 @@ func (a *App) handleDeleteRule(w http.ResponseWriter, r *http.Request, key strin
 	}
 }
 
+// parseAndValidateRule reads and validates a rule from the request body.
+// It validates the expression syntax using the expr library.
+// Returns the parsed rule and true on success, or writes an error response and returns false.
 func (a *App) parseAndValidateRule(w http.ResponseWriter, r *http.Request) (Rule, bool) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
