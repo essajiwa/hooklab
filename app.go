@@ -32,10 +32,10 @@ type ResponseConfig struct {
 type Rule struct {
 	ID         string      `json:"id"`
 	Name       string      `json:"name"`
-	Condition  string      `json:"condition"`  // expr expression, e.g., "body.amount > 100"
+	Condition  string      `json:"condition"` // expr expression, e.g., "body.amount > 100"
 	Response   interface{} `json:"response"`
 	StatusCode int         `json:"statusCode"`
-	Priority   int         `json:"priority"`   // Lower = higher priority
+	Priority   int         `json:"priority"` // Lower = higher priority
 	Enabled    bool        `json:"enabled"`
 }
 
@@ -166,30 +166,30 @@ func (a *App) getKeys() []string {
 	defer a.mu.Unlock()
 
 	keySet := make(map[string]struct{})
-	
+
 	// Add keys from events
 	for _, event := range a.events {
 		keySet[event.Key] = struct{}{}
 	}
-	
+
 	// Add keys from responses
 	for key := range a.responses {
 		keySet[key] = struct{}{}
 	}
-	
+
 	// Add keys from rules
 	for key := range a.rules {
 		keySet[key] = struct{}{}
 	}
-	
+
 	// Always include "default"
 	keySet["default"] = struct{}{}
-	
+
 	keys := make([]string, 0, len(keySet))
 	for key := range keySet {
 		keys = append(keys, key)
 	}
-	
+
 	sort.Strings(keys)
 	return keys
 }
